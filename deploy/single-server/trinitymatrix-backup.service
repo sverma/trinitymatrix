@@ -1,0 +1,8 @@
+[Unit]
+Description=Back up the TrinityMatrix database
+After=trinitymatrix.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/trinitymatrix/current/deploy/single-server/backup.sh
+UMask=0077

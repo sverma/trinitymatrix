@@ -1,0 +1,17 @@
+[Unit]
+Description=TrinityMatrix Docker Compose application
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/trinitymatrix/current
+ExecStart=/usr/bin/docker compose --env-file /opt/trinitymatrix/shared/runtime.env -f deploy/single-server/compose.yml up -d --wait
+ExecStop=/usr/bin/docker compose --env-file /opt/trinitymatrix/shared/runtime.env -f deploy/single-server/compose.yml stop
+TimeoutStartSec=180
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,27 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+deploy/single-server/runtime/
+deploy/single-server/runtime.env
+*.tgz
+
+# Private operations data is not part of the community source release.
+.aws/
+*.env
+*.key
+*.pem
+*.dump
+*.dump.partial
+*.tfstate
+*.tfstate.*
+*.tfplan
+**/postgres-tls/
+/backups/
+/docs/VPS_DEPLOYMENT.md

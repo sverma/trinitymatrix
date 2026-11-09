@@ -1,0 +1,137 @@
+name: trinitymatrix
+
+x-environment: &environment
+  NODE_ENV: production
+  HOST: 0.0.0.0
+  PORT: "8080"
+  REDIS_URL: redis://:${REDIS_PASSWORD:?Required}@redis:6379
+  STATE_NAMESPACE: trinitymatrix:single-host:v1
+  DATABASE_URL: postgresql://trinitymatrix:${POSTGRES_PASSWORD:?Required}@postgres:5432/trinitymatrix
+  DATABASE_SSL_MODE: verify-full
+  DATABASE_POOL_MAX: "5"
+  DURABLE_DATA_REQUIRED: "true"
+  GAMEPLAY_RUNTIME_MODE: single
+  APP_REPLICA_COUNT: "1"
+  MATCHMAKING_REGION: single-host
+  CHAT_ENCRYPTION_KEY: ${CHAT_ENCRYPTION_KEY:?Required}
+  CHAT_ENCRYPTION_KEY_VERSION: "1"
+  ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+  ADMIN_ACCESS_SECRET: ${ADMIN_ACCESS_SECRET:?Required}
+  ADMIN_WEBAUTHN_RP_ID: trinitymatrix.org
+  ADMIN_WEBAUTHN_ORIGIN: https://trinitymatrix.org
+  AUTH_PROVIDER: ${AUTH_PROVIDER:-disabled}
+  AUTH_STATE_EPOCH: ${AUTH_STATE_EPOCH:?Required}
+  OTP_HASH_SECRET: ${OTP_HASH_SECRET:?Required}
+  RESEND_API_KEY: ${RESEND_API_KEY:-}
+  EMAIL_FROM: ${EMAIL_FROM:-}
+  COOKIE_SECURE: "true"
+  ALLOWED_ORIGINS: https://trinitymatrix.org
+  TRUST_PROXY: "1"
+  LOG_LEVEL: info
+  WEB_DIST_PATH: /app/apps/web/dist
+  APP_VERSION: ${TRINITY_RELEASE:-single-host}
+  APP_REVISION: ${TRINITY_REVISION:-unknown}
+  APP_BUILD_TIME: ${TRINITY_BUILD_TIME:-unknown}
+  SHUTDOWN_GRACE_PERIOD_MS: "10000"
+  LEGAL_PUBLICATION_APPROVED: "false"
+
+x-app: &app
+  image: trinitymatrix-web:${TRINITY_RELEASE:-single-host}
+  build:
+    context: ../..
+    args:
+      APP_VERSION: ${TRINITY_RELEASE:-single-host}
+      APP_REVISION: ${TRINITY_REVISION:-unknown}
+      APP_BUILD_TIME: ${TRINITY_BUILD_TIME:-unknown}
+  environment: *environment
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  read_only: true
+  tmpfs:
+    - /tmp:size=16m,mode=1777
+  volumes:
+    - ${TRINITY_RUNTIME_DIR:?Required}/postgres-tls/ca.crt:/run/trinitymatrix/postgres-ca.crt:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "3"}
+
+services:
+  app:
+    <<: *app
+    restart: unless-stopped
+    mem_limit: 768m
+    stop_grace_period: 20s
+    ports: ["127.0.0.1:8180:8080"]
+    command:
+      - /bin/sh
+      - -ec
+      - export DATABASE_SSL_CA="$$(cat /run/trinitymatrix/postgres-ca.crt)"; exec node --enable-source-maps dist/index.js
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+
+  migrate:
+    <<: *app
+    profiles: [maintenance]
+    restart: "no"
+    command:
+      - /bin/sh
+      - -ec
+      - export DATABASE_SSL_CA="$$(cat /run/trinitymatrix/postgres-ca.crt)"; exec node --enable-source-maps dist/db/migrate-cli.js
+
+  postgres:
+    image: postgres:16.10-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: trinitymatrix
+      POSTGRES_USER: trinitymatrix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Required}
+    command: [postgres, -c, ssl=on, -c, ssl_cert_file=/etc/postgresql/tls/server.crt, -c, ssl_key_file=/etc/postgresql/tls/server.key]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ${TRINITY_RUNTIME_DIR:?Required}/postgres-tls:/etc/postgresql/tls:ro
+    security_opt: [no-new-privileges:true]
+    shm_size: 128m
+    mem_limit: 1g
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U trinitymatrix -d trinitymatrix"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    user: "999:1000"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Required}
+    command: [redis-server, --appendonly, "yes", --save, "60", "1", --requirepass, "${REDIS_PASSWORD:?Required}", --maxmemory, 256mb, --maxmemory-policy, noeviction]
+    volumes: [redis-data:/data]
+    read_only: true
+    tmpfs: ["/tmp:size=8m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 320m
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+volumes:
+  postgres-data:
+  redis-data:

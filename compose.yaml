@@ -1,0 +1,93 @@
+services:
+  app:
+    build:
+      context: .
+    environment:
+      NODE_ENV: development
+      PORT: "8080"
+      HOST: "0.0.0.0"
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql://trinitymatrix:trinitymatrix@postgres:5432/trinitymatrix
+      DATABASE_SSL_MODE: disable
+      DATABASE_POOL_MAX: "5"
+      CHAT_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      CHAT_ENCRYPTION_KEY_VERSION: "1"
+      ADMIN_EMAILS: admin@example.com
+      ADMIN_ACCESS_SECRET: local-admin-access-code
+      STATE_NAMESPACE: trinitymatrix:v1
+      AUTH_PROVIDER: mock
+      MOCK_OTP_CODE: "123456"
+      OTP_HASH_SECRET: local-trinitymatrix-otp-secret-change-me
+      COOKIE_SECURE: "false"
+      ALLOWED_ORIGINS: http://127.0.0.1:8180,http://localhost:8180
+      WEB_DIST_PATH: /app/apps/web/dist
+      APP_VERSION: local
+      APP_REVISION: compose
+      APP_BUILD_TIME: local
+      TRUST_PROXY: "false"
+      SHUTDOWN_GRACE_PERIOD_MS: "10000"
+    ports:
+      - "${TRINITY_APP_BIND:-127.0.0.1:8180}:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    stop_grace_period: 15s
+
+  redis:
+    image: redis:7.4-alpine
+    # Start as the image's unprivileged Redis account. With all capabilities
+    # dropped, the root entrypoint cannot traverse Redis-owned mode-0700 AOF
+    # directories before switching users after the first persisted restart.
+    user: "999:1000"
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - trinitymatrix_redis:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+
+  postgres:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_DB: trinitymatrix
+      POSTGRES_USER: trinitymatrix
+      POSTGRES_PASSWORD: trinitymatrix
+    volumes:
+      - trinitymatrix_postgres:/var/lib/postgresql/data
+    ports:
+      - "${TRINITY_POSTGRES_BIND:-127.0.0.1:5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trinitymatrix -d trinitymatrix"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  trinitymatrix_redis:
+  trinitymatrix_postgres:

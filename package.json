@@ -1,0 +1,33 @@
+{
+  "name": "trinitymatrix-web",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.5.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently --kill-others --names server,web --prefix-colors blue,magenta \"npm run dev -w @trinitymatrix/server\" \"npm run dev -w @trinitymatrix/web\"",
+    "build": "npm run build -w @trinitymatrix/server && npm run build -w @trinitymatrix/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:unit": "npm run test --workspaces --if-present",
+    "test:load": "node --test tests/load/*.test.mjs",
+    "test:restart": "npm run build && node tests/integration/restart-recovery.mjs",
+    "test:e2e": "playwright test",
+    "container:build": "docker build --build-arg APP_VERSION=0.1.0-local -t trinitymatrix-web:local .",
+    "container:verify": "docker compose up --build --wait",
+    "test": "npm run typecheck && npm run test:unit && npm run test:load && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.62.1",
+    "concurrently": "10.0.5",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 550 896" role="img" aria-labelledby="title description">
+  <title id="title">TrinityMatrix card back</title>
+  <desc id="description">A deep blue card back with a gold Trinity triangle and twenty-one at its centre.</desc>
+  <defs>
+    <linearGradient id="background" x1="36" y1="24" x2="514" y2="872" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#154d5f"/>
+      <stop offset=".55" stop-color="#082731"/>
+      <stop offset="1" stop-color="#031218"/>
+    </linearGradient>
+    <pattern id="matrix" width="72" height="72" patternUnits="userSpaceOnUse">
+      <circle cx="12" cy="12" r="4" fill="#f6c65d" fill-opacity=".18"/>
+      <circle cx="36" cy="36" r="4" fill="#f6c65d" fill-opacity=".11"/>
+      <circle cx="60" cy="60" r="4" fill="#f6c65d" fill-opacity=".18"/>
+    </pattern>
+  </defs>
+  <rect width="550" height="896" rx="42" fill="url(#background)"/>
+  <rect x="22" y="22" width="506" height="852" rx="28" fill="url(#matrix)" stroke="#f6c65d" stroke-width="10"/>
+  <rect x="45" y="45" width="460" height="806" rx="20" fill="none" stroke="#fff3cf" stroke-opacity=".58" stroke-width="3"/>
+  <g transform="translate(0 18)">
+    <path d="m275 240 155 272H120l155-272Z" fill="#061b24" fill-opacity=".7" stroke="#f4bd4e" stroke-width="22" stroke-linejoin="round"/>
+    <g fill="#fff3cf" stroke="#071b25" stroke-width="7">
+      <circle cx="275" cy="240" r="28"/>
+      <circle cx="430" cy="512" r="28"/>
+      <circle cx="120" cy="512" r="28"/>
+    </g>
+    <circle cx="275" cy="424" r="88" fill="#f4bd4e"/>
+    <circle cx="275" cy="424" r="70" fill="#fff3cf"/>
+    <text x="275" y="455" fill="#071b25" font-family="Georgia, 'Times New Roman', serif" font-size="92" font-weight="700" text-anchor="middle">21</text>
+  </g>
+  <g fill="#f6c65d">
+    <circle cx="251" cy="748" r="7"/><circle cx="275" cy="748" r="7"/><circle cx="299" cy="748" r="7"/>
+  </g>
+</svg>

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
+  <title id="title">TrinityMatrix mark</title>
+  <desc id="description">Three connected points surround the number twenty-one.</desc>
+  <defs>
+    <linearGradient id="background" x1="48" y1="32" x2="464" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#123f50"/>
+      <stop offset="1" stop-color="#04161e"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="104" y1="72" x2="416" y2="416" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffe29a"/>
+      <stop offset="1" stop-color="#e7a62c"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#background)"/>
+  <g opacity=".12" stroke="#f8f2df" stroke-width="2">
+    <path d="M64 144h384M64 256h384M64 368h384M144 64v384M256 64v384M368 64v384"/>
+  </g>
+  <path d="M256 82 424 376H88L256 82Z" fill="#071b25" fill-opacity=".5" stroke="url(#gold)" stroke-width="24" stroke-linejoin="round"/>
+  <g fill="#fff3cf" stroke="#071b25" stroke-width="8">
+    <circle cx="256" cy="82" r="31"/>
+    <circle cx="424" cy="376" r="31"/>
+    <circle cx="88" cy="376" r="31"/>
+  </g>
+  <circle cx="256" cy="284" r="92" fill="#f6bb48"/>
+  <circle cx="256" cy="284" r="75" fill="#fff3cf"/>
+  <text x="256" y="318" fill="#071b25" font-family="Georgia, 'Times New Roman', serif" font-size="100" font-weight="700" text-anchor="middle">21</text>
+</svg>

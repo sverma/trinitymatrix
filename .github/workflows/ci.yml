@@ -1,0 +1,81 @@
+name: Validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  application:
+    name: Application and browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:16.10-alpine
+        env:
+          POSTGRES_USER: trinitymatrix
+          POSTGRES_PASSWORD: trinitymatrix
+          POSTGRES_DB: trinitymatrix
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U trinitymatrix -d trinitymatrix"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Run unit tests
+        run: npm run test:unit
+
+      - name: Run load harness safety tests
+        run: npm run test:load
+
+      - name: Build production artifacts
+        run: npm run build
+
+      - name: Install Chromium test runtime
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser and accessibility tests
+        run: npm run test:e2e
+
+      - name: Build the production container
+        run: docker build --tag trinitymatrix-web:ci .
