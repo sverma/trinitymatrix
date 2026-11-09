@@ -261,7 +261,7 @@ test("a player can drop, concede the round, and open the replay", async ({ brows
     for (const message of ["Good game!", "Well played.", "See you at the next table."]) {
       await winner.getByLabel("Your message").fill(message);
       await winner.getByRole("button", { name: "Send message" }).click();
-      await expect(winner.getByText(message, { exact: true })).toBeVisible();
+      await expect(winner.getByLabel("Post-game messages").getByText(message, { exact: true })).toBeVisible();
     }
     await expect(winner.getByRole("button", { name: "Message limit reached" })).toBeDisabled();
   } finally {
