@@ -14,7 +14,7 @@ async function authenticatedPlayer(browser: Browser, index: number): Promise<{ c
   await page.getByRole("button", { name: "Send verification code" }).click();
   await page.getByLabel("Six-digit OTP").fill("123456");
   await page.getByRole("button", { name: "Continue to lobby" }).click();
-  await expect(page.getByRole("heading", { name: "Choose your table" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Make every meld count." })).toBeVisible();
   return { context, page, email };
 }
 
@@ -58,7 +58,7 @@ async function authenticatedMobilePlayer(
   await page.getByRole("button", { name: "Send verification code" }).click();
   await page.getByLabel("Six-digit OTP").fill("123456");
   await page.getByRole("button", { name: "Continue to lobby" }).click();
-  await expect(page.getByRole("heading", { name: "Choose your table" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Make every meld count." })).toBeVisible();
 
   return { context, page, email, displayName, orientation };
 }

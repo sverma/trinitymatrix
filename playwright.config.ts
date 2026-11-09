@@ -45,9 +45,10 @@ export default defineConfig({
       ADMIN_ACCESS_SECRET: localAdminBootstrapSecret,
       ADMIN_WEBAUTHN_RP_ID: "localhost",
       ADMIN_WEBAUTHN_ORIGIN: "http://localhost:8180",
+      LOG_LEVEL: "warn",
       ALLOWED_ORIGINS: "http://127.0.0.1:8180,http://localhost:8180"
     },
-    url: "http://127.0.0.1:8180",
+    url: "http://127.0.0.1:8180/readyz",
     timeout: 120_000,
     reuseExistingServer: false,
     stdout: "pipe",

@@ -69,7 +69,7 @@ async function authenticatedPlayer(
   await page.getByRole("button", { name: "Send verification code" }).click();
   await page.getByLabel("Six-digit OTP").fill("123456");
   await page.getByRole("button", { name: "Continue to lobby" }).click();
-  await expect(page.getByRole("heading", { name: "Choose your table" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Make every meld count." })).toBeVisible();
 
   const playerId = await page.evaluate(async () => {
     const response = await fetch("/api/session", { credentials: "same-origin" });
