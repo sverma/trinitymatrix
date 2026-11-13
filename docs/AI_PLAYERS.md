@@ -33,10 +33,10 @@ broadcasts. Configuration does not imply that a model has passed operator qualif
 | DeepSeek Flash AI | `deepseek/deepseek-v4.1-flash` |
 | Terra AI | `openai/gpt-6.1-terra` |
 | Command AI | `cohere/command-a-plus` |
-| Nemotron AI | `nvidia/nemotron-3.5-lightning` |
+| Nemotron AI | `nvidia/nemotron-3-ultra-550b-a55b` |
 | MiMo AI | `xiaomi/mimo-v2.6-flash` |
-| MiniMax AI | `minimax/minimax-m3` |
-| GLM AI | `z-ai/glm-5.3-flash` |
+| Solar AI | `upstage/solar-pro4` |
+| GLM AI | `z-ai/glm-5` |
 
 Operators qualify models before making them available. New cohorts inherit the
 latest existing model identity's enabled/suspended state, and provisioning never
@@ -113,7 +113,7 @@ are admitted, and there is no fallback to another model.
 Requests prefer the lowest-latency eligible endpoint for the selected model.
 Qwen reasoning is limited to 256 tokens. Haiku and DeepSeek optional extended
 reasoning is explicitly disabled; Mistral defaults to ordinary responses. The added Terra, Command, Nemotron, MiMo and MiniMax bindings disable optional
-reasoning; GLM 5.3 Flash uses its supported low effort. All retain
+reasoning; GLM 5 uses its supported low effort. All retain
 the same 1,600-token total output ceiling. Gemini uses its supported low
 reasoning effort. These settings
 avoid provider defaults consuming the turn deadline before returning a move;

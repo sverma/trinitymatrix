@@ -128,9 +128,9 @@ function decisionJsonSchema(observation: AiAgentObservation, modelId: string, mu
   const actions = mustDeclare ? ["declare"] : allowedActions(observation);
   const cardRequired = actions.includes("discard") || actions.includes("declare");
   const cardIds = observation.hand.map(({ id }) => id);
-  // This Gemini endpoint rejects otherwise valid minItems/maxItems constraints.
+  // These endpoints reject otherwise valid minItems/maxItems constraints.
   // Retain all array bounds in local validation and exact action/card enums here.
-  const portableArrays = modelId === "google/gemini-3.8-flash";
+  const portableArrays = modelId === "google/gemini-3.8-flash" || modelId === "cohere/command-a-plus";
   return {
     type: "object",
     properties: {
@@ -193,9 +193,8 @@ function validatedRulesFacts(value: AiGameRulesFacts | undefined, observation: A
 
 /** Keep reasoning inside the shared output/turn budget without changing models. */
 function modelReasoningOptions(modelId: string) {
-  if (["openai/gpt-6.1-terra", "cohere/command-a-plus", "nvidia/nemotron-3.5-lightning",
-    "xiaomi/mimo-v2.6-flash", "minimax/minimax-m3"].includes(modelId)) return { enabled: false, exclude: true };
-  if (modelId === "z-ai/glm-5.3-flash") return { effort: "low", exclude: true };
+  if (["openai/gpt-6.1-terra", "cohere/command-a-plus", "nvidia/nemotron-3-ultra-550b-a55b",
+    "xiaomi/mimo-v2.6-flash", "upstage/solar-pro4", "z-ai/glm-5"].includes(modelId)) return { enabled: false, exclude: true };
   if (modelId === "openai/gpt-6-luna" || modelId === "deepseek/deepseek-v4.1-flash") return { enabled: false, exclude: true };
   if (modelId === "anthropic/claude-haiku-5.5" || modelId === "deepseek/deepseek-v3.2") return { enabled: false, exclude: true };
   if (modelId === "google/gemini-3.8-flash") return { effort: "low", exclude: true };

@@ -122,10 +122,10 @@ describe("legacy model-bound OpenRouter player", () => {
     { id: "openai/gpt-6-luna", reasoning: { enabled: false, exclude: true } },
     { id: "openai/gpt-6.1-terra", reasoning: { enabled: false, exclude: true } },
     { id: "cohere/command-a-plus", reasoning: { enabled: false, exclude: true } },
-    { id: "nvidia/nemotron-3.5-lightning", reasoning: { enabled: false, exclude: true } },
+    { id: "nvidia/nemotron-3-ultra-550b-a55b", reasoning: { enabled: false, exclude: true } },
     { id: "xiaomi/mimo-v2.6-flash", reasoning: { enabled: false, exclude: true } },
-    { id: "minimax/minimax-m3", reasoning: { enabled: false, exclude: true } },
-    { id: "z-ai/glm-5.3-flash", reasoning: { effort: "low", exclude: true } },
+    { id: "upstage/solar-pro4", reasoning: { enabled: false, exclude: true } },
+    { id: "z-ai/glm-5", reasoning: { enabled: false, exclude: true } },
     { id: "openai/gpt-6-luna-preview", reasoning: undefined },
     { id: "deepseek/deepseek-v4.1-flash", reasoning: { enabled: false, exclude: true } },
     { id: "meta-llama/llama-4-maverick", reasoning: undefined },
@@ -264,8 +264,7 @@ describe("legacy model-bound OpenRouter player", () => {
       .rejects.toMatchObject({ code: "invalid-decision" });
   });
 
-  it("omits Gemini-incompatible array bounds while retaining exact action and owned-card enums", async () => {
-    const geminiId = "google/gemini-3.8-flash";
+  it.each(["google/gemini-3.8-flash", "cohere/command-a-plus"])("uses portable array constraints for %s while retaining action and owned-card enums", async (geminiId) => {
     const view = drawnObservation();
     const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
       const body = JSON.parse(String(init?.body));
@@ -650,8 +649,7 @@ describe("v2 model-controlled winning protocol", () => {
     expect(body.response_format.json_schema.schema.properties.action.enum).toEqual(["submit-hand"]);
   });
 
-  it("preserves Gemini's portable schema while requiring its selected model to declare", async () => {
-    const selected = "google/gemini-3.8-flash";
+  it.each(["google/gemini-3.8-flash", "cohere/command-a-plus"])("preserves the portable schema for %s while requiring a winning declaration", async (selected) => {
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(winningDecision(), { model: selected })));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
     await client.decide({ modelId: selected, observation: winningObservation(), memory: "", rulesFacts: winningFacts() });

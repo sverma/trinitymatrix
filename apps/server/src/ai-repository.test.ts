@@ -26,10 +26,10 @@ describe("persistent AI roster identities", () => {
   it.each([
     { modelId: "openai/gpt-6.1-terra", modelName: "GPT-6.1 Terra", displayName: "Terra AI" },
     { modelId: "cohere/command-a-plus", modelName: "Command A+", displayName: "Command AI" },
-    { modelId: "nvidia/nemotron-3.5-lightning", modelName: "Nemotron 3.5 Lightning", displayName: "Nemotron AI" },
+    { modelId: "nvidia/nemotron-3-ultra-550b-a55b", modelName: "Nemotron 3 Ultra", displayName: "Nemotron AI" },
     { modelId: "xiaomi/mimo-v2.6-flash", modelName: "MiMo V2.6 Flash", displayName: "MiMo AI" },
-    { modelId: "minimax/minimax-m3", modelName: "MiniMax M3", displayName: "MiniMax AI" },
-    { modelId: "z-ai/glm-5.3-flash", modelName: "GLM 5.3 Flash", displayName: "GLM AI" },
+    { modelId: "upstage/solar-pro4", modelName: "Solar Pro 4", displayName: "Solar AI" },
+    { modelId: "z-ai/glm-5", modelName: "GLM 5", displayName: "GLM AI" },
     { modelId: "openai/gpt-6-luna", modelName: "GPT-6 Luna", displayName: "Luna AI" },
     { modelId: "meta-llama/llama-4-maverick", modelName: "Llama 4 Maverick", displayName: "Llama AI" },
     { modelId: "deepseek/deepseek-v4.1-flash", modelName: "DeepSeek V4.1 Flash", displayName: "DeepSeek Flash AI" }
