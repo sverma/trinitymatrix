@@ -104,6 +104,7 @@ function PlayerApp() {
       realtimePrivateInvitations={socket.privateInvitations}
       realtimePrivateRooms={socket.privateRoomUpdates}
       connectionGeneration={socket.connectionGeneration}
+      connected={socket.connection === "connected" && socket.playerId !== null}
       onOpenPrivateRoom={socket.openPrivateRoom}
       onSectionChange={setPlayerSection}
       onJoin={(count) => { setPlayerSection("play"); socket.joinQueue(count); }}

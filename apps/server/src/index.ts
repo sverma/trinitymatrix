@@ -15,6 +15,7 @@ import {
   MockEmailOtpSender,
   ResendEmailOtpSender,
   normalizeEmail,
+  isAiPlayerEmail,
   profileUpdateSchema,
   type EmailOtpSender
 } from "./auth";
@@ -63,6 +64,10 @@ import {
 } from "./admin-passkeys";
 import { serializePublicPolicyMetadataScript } from "./public-policy-metadata";
 import { createValkeyClient } from "./valkey-client";
+import { PostgresAiStore } from "./ai-repository";
+import { OpenRouterAgentClient } from "./ai-openrouter";
+import { AiPlayers } from "./ai-players";
+import { registerAiPlayerRoutes } from "./ai-routes";
 
 const config = loadRuntimeConfig(process.env);
 assertServerAuthConfig(config);
@@ -250,12 +255,21 @@ const matchmaker = distributedMatchmaker ?? new Matchmaker(
   (error) => app.log.error({ err: error }, "Could not persist match state"),
   archive
 );
+const aiStore = postgres && config.aiPlayersEnabled ? new PostgresAiStore(postgres) : null;
+if (aiStore) await aiStore.provision();
+const aiPlayers = aiStore && matchmaker instanceof Matchmaker ? new AiPlayers(
+  matchmaker, aiStore,
+  config.openRouterApiKey ? new OpenRouterAgentClient({ apiKey: config.openRouterApiKey }) : null,
+  config.aiDailyBudgetUsd,
+  (code, agentId) => app.log.warn({ code, agentId }, "AI player operation unavailable")
+) : null;
 const hydrateState = (): Promise<void> => {
   if (stateHydrated) return Promise.resolve();
   if (hydrationPromise) return hydrationPromise;
   hydrationPromise = (async () => {
     if (distributedTransport) await distributedTransport.start();
     await matchmaker.restore();
+    if (aiPlayers) await aiPlayers.start();
     if (leaseSupervisor) leaseSupervisor.start();
     if (distributedWorkers) distributedWorkers.start();
   })()
@@ -333,6 +347,7 @@ app.post("/api/auth/request-otp", { config: { rateLimit: { max: authRateLimits.r
   if (!redisReady || !stateHydrated) return reply.code(503).send({ error: "The game service is starting. Please retry shortly." });
   const parsed = requestOtpSchema.safeParse(request.body);
   if (!parsed.success) return reply.code(400).send({ error: "Enter a valid email address." });
+  if (isAiPlayerEmail(parsed.data.email)) return reply.code(400).send({ error: "AI player identities cannot sign in." });
   const emailLimit = await requestOtpEmailRateLimit(request);
   if (!emailLimit.isAllowed && emailLimit.isExceeded) {
     reply.header("Retry-After", String(emailLimit.ttlInSeconds));
@@ -402,6 +417,15 @@ app.post("/api/auth/logout", { config: { rateLimit: { max: 30, timeWindow: "10 m
   reply.clearCookie("rm_session", { path: "/" });
   reply.clearCookie("rm_admin", { path: "/" });
   return reply.code(204).send();
+});
+
+await registerAiPlayerRoutes(app, {
+  players: aiPlayers,
+  resolveSession: async (request) => auth.getSession(request.cookies.rm_session),
+  resolveAdminAccess: hasAdminAccess,
+  adminEmails: config.adminEmails,
+  isReady: () => redisReady && stateHydrated && !shuttingDown,
+  dailyBudgetUsd: config.aiDailyBudgetUsd
 });
 
 if (repository) {
@@ -617,6 +641,7 @@ const shutdown = (signal: NodeJS.Signals): Promise<void> => {
       // Valkey transport or PostgreSQL pool it may still be using.
       if (distributedWorkers) await distributedWorkers.drain();
       if (leaseSupervisor) await leaseSupervisor.drain();
+      if (aiPlayers) await aiPlayers.stop();
       await matchmaker.shutdown();
       await app.close();
       await matchmaker.flush();

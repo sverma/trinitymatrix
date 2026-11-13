@@ -6,7 +6,8 @@ import {
   type GameReplay,
   type MatchHistoryEntry,
   type RealtimeChatMessage,
-  type RankingEntry
+  type RankingEntry,
+  type RankingComposition
 } from "../api";
 import { PostGameChat } from "./PostGameChat";
 import { ReplayViewer } from "./ReplayViewer";
@@ -34,13 +35,17 @@ const historyRetryWindowMs = 30_000;
 const historyRetryMaximumDelayMs = 2_000;
 
 export function RankingsView({ playerId }: { playerId: string }) {
+  const [composition, setComposition] = useState<RankingComposition>("human");
   const [rankings, setRankings] = useState<RankingEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let active = true;
-    api.rankings().then((response) => {
+    setLoading(true);
+    setError("");
+    setRankings([]);
+    api.rankings(composition === "human" ? undefined : composition).then((response) => {
       if (active) setRankings(collection(response, "rankings"));
     }).catch((reason) => {
       if (active) setError(reason instanceof Error ? reason.message : "Could not load the rankings.");
@@ -48,14 +53,26 @@ export function RankingsView({ playerId }: { playerId: string }) {
       if (active) setLoading(false);
     });
     return () => { active = false; };
-  }, []);
+  }, [composition]);
+
+  const compositionLabel = composition === "human" ? "Human matches" : composition === "ai" ? "AI matches" : "Mixed matches";
 
   return <section className="portal-view" aria-labelledby="rankings-title">
     <div className="portal-hero compact-hero">
       <span className="eyebrow">Ranking arena</span>
       <h1 id="rankings-title">Leaderboard</h1>
-      <p>Ratings move with completed ranking games. Wins break ties, followed by games played.</p>
+      <p>Human, AI and mixed matches each have independent ratings. Results affect only the ranking for that match’s player composition.</p>
     </div>
+    <div className="ranking-composition-switch" role="group" aria-label="Ranking match composition">
+      {(["human", "ai", "mixed"] as const).map((value) => <button key={value} type="button" className={composition === value ? "active" : ""} aria-pressed={composition === value} onClick={() => setComposition(value)}>
+        {value === "human" ? "Human matches" : value === "ai" ? "AI matches" : "Mixed matches"}
+      </button>)}
+    </div>
+    <p className="ranking-composition-description">{composition === "human"
+      ? "Standings from ranked matches played entirely by humans."
+      : composition === "ai"
+        ? "Standings from ranked matches played entirely by AI players."
+        : "Humans and AI players ranked together using their results from mixed matches."}</p>
     {loading ? <div className="portal-panel loading-inline" role="status">Loading rankings…</div>
       : error ? <div className="portal-panel error-state" role="alert"><h2>Rankings unavailable</h2><p>{error}</p></div>
       : rankings.length === 0 ? <div className="portal-panel empty-state"><h2>No ranked games yet</h2><p>Complete the first match to start the leaderboard.</p></div>
@@ -65,22 +82,25 @@ export function RankingsView({ playerId }: { playerId: string }) {
             <span className="podium-rank">#{entry.rank}</span>
             <span className="podium-badge" aria-hidden="true">{badgeSymbol(entry)}</span>
             <strong>{entry.displayName}</strong>
+            {entry.actorKind === "ai" && <small className="ranked-model-label">AI player · {entry.modelId}</small>}
             <span>{entry.rating} rating</span>
           </article>)}
         </div>
         <div className="table-scroll">
           <table className="data-table rankings-table">
             <caption>Current ranking standings</caption>
-            <thead><tr><th scope="col">Rank</th><th scope="col">Player</th><th scope="col">Rating</th><th scope="col">Wins</th><th scope="col">Games</th><th scope="col">Win rate</th></tr></thead>
+            <thead><tr><th scope="col">Rank</th><th scope="col">Player</th><th scope="col">Type / model</th><th scope="col">Rating</th><th scope="col">Wins</th><th scope="col">Games</th><th scope="col">Win rate</th></tr></thead>
             <tbody>{rankings.map((entry) => {
               const winRate = entry.gamesPlayed === 0 ? 0 : Math.round((entry.wins / entry.gamesPlayed) * 100);
               return <tr key={entry.playerId} className={entry.playerId === playerId ? "current-player" : ""}>
                 <td><strong>#{entry.rank}</strong></td>
                 <th scope="row"><span className="table-player"><span aria-hidden="true">{badgeSymbol(entry)}</span>{entry.displayName}{entry.playerId === playerId && <small>You</small>}</span></th>
+                <td>{entry.actorKind === "ai" ? <span className="ranked-model-label">AI{entry.modelId && <small>{entry.modelId}</small>}</span> : "Human"}</td>
                 <td>{entry.rating}</td><td>{entry.wins}</td><td>{entry.gamesPlayed}</td><td>{winRate}%</td>
               </tr>;
             })}</tbody>
           </table>
+          <p className="ranking-scope-note">{compositionLabel} · Ratings from other match types are kept separate.</p>
         </div>
       </div>}
   </section>;

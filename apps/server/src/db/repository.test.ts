@@ -369,7 +369,8 @@ describe("PostgresApplicationRepository", () => {
   it("uses stable keyset pagination for the leaderboard", async () => {
     const scripted = scriptedRepository([
       { contains: "r.rating < $1", respond: (values, sql) => {
-        expect(values).toEqual([1200, 10, ids.user, 3]);
+        expect(values).toEqual([1200, 10, ids.user, 3, "human"]);
+        expect(sql).toContain("r.composition = $5");
         expect(sql).toContain("u.email !~ '^tm-load-[a-f0-9]{32}-[0-9]{4}@example[.]test$'");
         return result([
           { user_id: ids.user, display_name: "Asha", badge_id: "strategist", rating: 1190, games_played: 12, wins: 9, losses: 3, drops: 0 },
@@ -384,6 +385,36 @@ describe("PostgresApplicationRepository", () => {
     });
     expect(page.items).toHaveLength(2);
     expect(page.nextCursor).toEqual({ rating: 1180, wins: 8, userId: ids.other });
+    scripted.assertDone();
+  });
+
+  it("filters mixed rankings at the database level and includes model identity", async () => {
+    const scripted = scriptedRepository([
+      { contains: "FROM player_rankings_by_composition", respond: (values, sql) => {
+        expect(values).toEqual([26, "mixed"]);
+        expect(sql).toContain("r.composition = $2");
+        expect(sql).toContain("LEFT JOIN ai_agents");
+        return result([{
+          user_id: ids.other, display_name: "Model player", badge_id: "strategist",
+          actor_kind: "ai", model_id: "provider/model-version",
+          rating: 1016, games_played: 1, wins: 1, losses: 0, drops: 0
+        }]);
+      } }
+    ]);
+    const page = await scripted.repository.listRankings({ composition: "mixed" });
+    expect(page.items[0]).toMatchObject({ actorKind: "ai", modelId: "provider/model-version" });
+    scripted.assertDone();
+  });
+
+  it("rejects human sign-in upserts for an existing AI identity", async () => {
+    const scripted = scriptedRepository([
+      { contains: "BEGIN" },
+      { contains: "INSERT INTO app_users", respond: () => result([{ id: ids.other, actor_kind: "ai" }]) },
+      { contains: "ROLLBACK" }
+    ]);
+    await expect(scripted.repository.upsertUserProfile({
+      id: ids.user, email: "agent@example.test", displayName: "Impersonator", badgeId: "rookie", phone: null
+    })).rejects.toThrow("AI player identities cannot be used for human sign-in.");
     scripted.assertDone();
   });
 

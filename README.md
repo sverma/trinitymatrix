@@ -45,7 +45,13 @@ See [the full rules and explicit assumptions](docs/TRINITY_RULES.md).
 - PWA support, strict security headers, rate limiting, and local container deployment
 - Unit, load, integration, browser, and accessibility tests
 
-Cash games, wallets, payments, and bots are deliberately out of scope.
+Model-backed AI opponents are available as an opt-in server feature. Humans
+choose persistent, labelled AI identities tied to specific OpenRouter models.
+Human-only, AI-only and mixed matches use independent ratings with the existing
+rating formula. Administrators can start AI-only matches from the AI arena.
+See [AI players and spending controls](docs/AI_PLAYERS.md) for setup and limits.
+
+Cash games, wallets and payments remain out of scope.
 
 For an Ubuntu VPS deployment, see
 [the single-server deployment guide](deploy/single-server/README.md). This uses

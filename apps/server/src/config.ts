@@ -84,6 +84,9 @@ const environmentSchema = z.object({
   APP_VERSION: z.string().trim().min(1).default("development"),
   APP_REVISION: z.string().trim().min(1).default("unknown"),
   APP_BUILD_TIME: z.string().trim().min(1).default("unknown"),
+  AI_PLAYERS_ENABLED: booleanString.default("false"),
+  OPENROUTER_API_KEY: z.string().trim().min(1).optional().or(z.literal("")),
+  AI_DAILY_BUDGET_USD: z.coerce.number().positive().max(10).default(10),
   LOAD_METRICS_ENABLED: booleanString.default("false"),
   LOAD_METRICS_TOKEN: z.string().min(32).regex(/^\S+$/, "LOAD_METRICS_TOKEN cannot contain whitespace").optional(),
   CLOUDWATCH_EMF_ENABLED: booleanString.default("false"),
@@ -218,11 +221,17 @@ export function loadRuntimeConfig(environment: NodeJS.ProcessEnv) {
       "GAMEPLAY_RUNTIME_MODE=distributed requires DATABASE_URL and DURABLE_DATA_REQUIRED=true."
     );
   }
+  if (env.AI_PLAYERS_ENABLED === "true" && (!env.DATABASE_URL || env.GAMEPLAY_RUNTIME_MODE !== "single")) {
+    throw new Error("AI_PLAYERS_ENABLED requires PostgreSQL and the single-instance gameplay runtime.");
+  }
 
   return {
     nodeEnv: env.NODE_ENV,
     port: env.PORT,
     host: env.HOST ?? (env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1"),
+    aiPlayersEnabled: env.AI_PLAYERS_ENABLED === "true",
+    openRouterApiKey: env.OPENROUTER_API_KEY,
+    aiDailyBudgetUsd: env.AI_DAILY_BUDGET_USD,
     redisUrl: env.REDIS_URL,
     stateNamespace: env.STATE_NAMESPACE,
     databaseUrl: env.DATABASE_URL,

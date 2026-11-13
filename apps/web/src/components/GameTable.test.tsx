@@ -77,6 +77,16 @@ describe("GameTable", () => {
     expect(screen.getByText("Private · unranked · 2 players")).toBeInTheDocument();
   });
 
+  it("identifies model-backed opponents and the mixed ranking scope at the table", () => {
+    const mixed = game(13);
+    mixed.players[1] = { ...mixed.players[1]!, actorKind: "ai", aiModelId: "provider/model-one" };
+    render(<GameTable {...actions} game={mixed} hand={[]} playerId="p1" notice="Connected." winner={null} />);
+    expect(screen.getByText("Mixed · ranked · 2 players")).toBeInTheDocument();
+    expect(screen.getByRole("listitem", { name: /Kabir, AI player using provider\/model-one/ })).toBeInTheDocument();
+    expect(screen.getByText("provider/model-one")).toBeInTheDocument();
+    expect(screen.getByText("Results at this table count toward mixed-match ratings.")).toBeInTheDocument();
+  });
+
   it("plays distinct cues as the local turn starts and ends, with a mute control", async () => {
     Object.values(turnSoundMocks).forEach((mock) => mock.mockClear());
     const user = userEvent.setup();

@@ -1,4 +1,3 @@
-import type WebSocket from "ws";
 import { WebSocket as WebSocketRuntime } from "ws";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -15,12 +14,15 @@ import type {
 import { RankingGame, rankingGameSnapshotSchema, type GameResult, type RankingGameSnapshot } from "./game";
 import type { StateStore } from "./persistence";
 
+export type GameplaySocket = { readyState: number; send(message: string): void; close(code?: number, reason?: string): void };
 type Connection = {
   playerId: string;
   email?: string;
   displayName: string;
   badgeId?: ProfileBadgeId;
-  socket: WebSocket;
+  actorKind?: "human" | "ai";
+  aiModelId?: string;
+  socket: GameplaySocket;
 };
 
 type GameCommand = Extract<ClientMessage, { type: `game.${string}` }>;
@@ -368,7 +370,7 @@ export class Matchmaker {
     this.connections.get(playerId)?.socket.close(1008, "Account suspended");
   }
 
-  disconnect(playerId: string, socket: WebSocket): void {
+  disconnect(playerId: string, socket: GameplaySocket): void {
     const current = this.connections.get(playerId);
     if (current?.socket !== socket) return;
     this.connections.delete(playerId);
@@ -396,6 +398,51 @@ export class Matchmaker {
       return;
     }
     this.applyGameCommand(playerId, message);
+  }
+
+  /** Only the caller's own hand and public information leave this boundary. */
+  agentView(playerId: string) {
+    const game = this.gameFor(playerId);
+    return game ? { playerId, state: game.publicState(), hand: game.handFor(playerId) } : null;
+  }
+
+  isPlayerAvailable(playerId: string): boolean {
+    return this.connections.get(playerId)?.socket.readyState === WebSocketRuntime.OPEN && this.canEnterPrivateRoom(playerId);
+  }
+
+  /** Selected AI tables never enroll opponents in the public human queue. */
+  startSelectedMatch(playerIds: readonly string[]): string {
+    if ((playerIds.length !== 2 && playerIds.length !== 6) || new Set(playerIds).size !== playerIds.length) {
+      throw new Error("Select distinct players for a two- or six-player table.");
+    }
+    if (playerIds.some((id) => !this.isPlayerAvailable(id))) {
+      throw new Error("A selected player is busy, queued, or disconnected. Refresh and retry.");
+    }
+    return this.startMatch(playerIds.map((id) => this.connections.get(id)!)).id;
+  }
+
+  executeAgentCommand(playerId: string, command: GameCommand): GameResult | null {
+    if (this.connections.get(playerId)?.actorKind !== "ai") throw new Error("An AI connection is required.");
+    return this.applyGameCommand(playerId, command);
+  }
+
+  private startMatch(players: readonly Connection[]): RankingGame {
+    const game = new RankingGame(players.map(({ playerId: id, displayName, badgeId, actorKind, aiModelId }) => ({
+      id, displayName, badgeId: badgeId ?? "rookie",
+      ...(actorKind ? { actorKind } : {}), ...(aiModelId ? { aiModelId } : {})
+    })));
+    this.games.set(game.id, game);
+    this.gameTypes.set(game.id, "general");
+    for (const player of players) this.playerGames.set(player.playerId, game.id);
+    const started = game.snapshot();
+    void this.archiveWork(game.id, (archive) => archive.recordEvent({
+      game: started, matchType: "general", privateRoomCode: null, eventType: "game.started",
+      actorPlayerId: null, commandId: null, command: null, occurredAt: new Date()
+    }));
+    for (const player of players) this.sendStarted(player.playerId, game);
+    this.armTimer(game);
+    this.persist();
+    return game;
   }
 
   private joinQueue(playerId: string, playerCount: PlayerCount): void {
@@ -435,37 +482,16 @@ export class Matchmaker {
         .filter((connection): connection is Connection => Boolean(connection));
       if (players.length !== playerCount) break;
       queue.splice(0, playerCount);
-      const game = new RankingGame(players.map(({ playerId: id, displayName, badgeId }) => ({
-        id,
-        displayName,
-        badgeId: badgeId ?? "rookie"
-      })));
-      this.games.set(game.id, game);
-      this.gameTypes.set(game.id, "general");
-      for (const player of players) this.playerGames.set(player.playerId, game.id);
-      const started = game.snapshot();
-      void this.archiveWork(game.id, (archive) => archive.recordEvent({
-        game: started,
-        matchType: "general",
-        privateRoomCode: null,
-        eventType: "game.started",
-        actorPlayerId: null,
-        commandId: null,
-        command: null,
-        occurredAt: new Date()
-      }));
-      for (const player of players) this.sendStarted(player.playerId, game);
-      this.armTimer(game);
-      this.persist();
+      this.startMatch(players);
     }
     this.broadcastQueue(playerCount);
   }
 
-  private applyGameCommand(playerId: string, command: GameCommand): void {
+  private applyGameCommand(playerId: string, command: GameCommand): GameResult | null {
     const game = this.gameFor(playerId);
     if (!game) {
       this.send(playerId, { type: "error", code: "NO_ACTIVE_GAME", message: "Join a queue before playing." });
-      return;
+      return null;
     }
     const result = game.apply(playerId, command);
     if (!result.accepted) {
@@ -476,7 +502,7 @@ export class Matchmaker {
         message: result.message,
         revision: game.publicState().revision
       });
-      return;
+      return result;
     }
     const archived = game.snapshot();
     // Archive work is serialized and may not execute until after finishGame has
@@ -512,7 +538,7 @@ export class Matchmaker {
     }
     if (result.ended) {
       this.finishGame(game, archived, result.ended, result.left);
-      return;
+      return result;
     } else {
       this.armTimer(game);
     }
@@ -521,6 +547,7 @@ export class Matchmaker {
       this.send(result.left.playerId, { type: "game.left", gameId: game.id, outcome: "dropped" });
     }
     this.persist();
+    return result;
   }
 
   private sendStarted(playerId: string, game: RankingGame): void {

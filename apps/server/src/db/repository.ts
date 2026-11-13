@@ -87,6 +87,8 @@ export type GameEventRecord = Readonly<{
   occurredAt: Date;
 }>;
 
+export type RankingComposition = "human" | "ai" | "mixed";
+
 export type RankingRecord = Readonly<{
   userId: string;
   displayName: string;
@@ -96,6 +98,8 @@ export type RankingRecord = Readonly<{
   wins: number;
   losses: number;
   drops: number;
+  actorKind?: "human" | "ai";
+  modelId?: string;
 }>;
 
 export type ChatMessageRecord = Readonly<{
@@ -252,7 +256,7 @@ export interface ApplicationRepository {
     }[];
   }): Promise<MatchRecord>;
   getRankingsForUsers(userIds: readonly string[]): Promise<readonly RankingRecord[]>;
-  listRankings(input?: { cursor?: RankingCursor; limit?: number }): Promise<Page<RankingRecord, RankingCursor>>;
+  listRankings(input?: { cursor?: RankingCursor; limit?: number; composition?: RankingComposition }): Promise<Page<RankingRecord, RankingCursor>>;
   listUserMatches(input: {
     userId: string;
     cursor?: MatchHistoryCursor;
@@ -385,6 +389,8 @@ interface RankingRow extends QueryResultRow {
   wins: number;
   losses: number;
   drops: number;
+  actor_kind?: "human" | "ai";
+  model_id?: string | null;
 }
 
 interface ChatRow extends QueryResultRow {
@@ -492,7 +498,9 @@ function mapRanking(row: RankingRow): RankingRecord {
     gamesPlayed: row.games_played,
     wins: row.wins,
     losses: row.losses,
-    drops: row.drops
+    drops: row.drops,
+    actorKind: row.actor_kind ?? "human",
+    ...(row.model_id ? { modelId: row.model_id } : {})
   };
 }
 
@@ -552,15 +560,18 @@ export class PostgresApplicationRepository implements ApplicationRepository {
     const email = input.email.trim().toLowerCase();
     const now = input.now ?? new Date();
     return inTransaction(this.pool, async (client) => {
-      const user = await client.query<{ id: string }>(
+      const user = await client.query<{ id: string; actor_kind: "human" | "ai" }>(
         `INSERT INTO app_users (id, email, created_at, updated_at)
          VALUES ($1, $2, $3, $3)
          ON CONFLICT (email) DO UPDATE SET updated_at = EXCLUDED.updated_at
-         RETURNING id`,
+         RETURNING id, actor_kind`,
         [input.id, email, now]
       );
       const userId = user.rows[0]?.id;
       if (!userId) throw new Error("PostgreSQL did not return the upserted user.");
+      if (user.rows[0]?.actor_kind === "ai") {
+        throw new RepositoryConflictError("AI player identities cannot be used for human sign-in.");
+      }
       await client.query(
         `INSERT INTO player_profiles (
            user_id, display_name, badge_id, phone_country_code, phone_national_number, created_at, updated_at
@@ -581,7 +592,11 @@ export class PostgresApplicationRepository implements ApplicationRepository {
         ]
       );
       await client.query(
-        "INSERT INTO player_rankings (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+        `WITH legacy_ranking AS (
+           INSERT INTO player_rankings (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING
+         )
+         INSERT INTO player_rankings_by_composition (user_id, composition)
+         VALUES ($1, 'human') ON CONFLICT (user_id, composition) DO NOTHING`,
         [userId]
       );
       const profile = await this.selectProfile(client, userId);
@@ -1306,7 +1321,31 @@ export class PostgresApplicationRepository implements ApplicationRepository {
       ratingAfter: number;
     }[];
   }): Promise<MatchRecord> {
-    return inTransaction(this.pool, (client) => this.completeMatchWithResults(client, input));
+    return inTransaction(this.pool, async (client) => {
+      const composition = await this.rankingCompositionForMatch(client, input.matchId);
+      return this.completeMatchWithResults(client, input, true, composition);
+    });
+  }
+
+  private async rankingCompositionForMatch(
+    client: PoolClient,
+    matchId: string,
+    expectedUserIds?: readonly string[]
+  ): Promise<RankingComposition> {
+    const participants = await client.query<{ id: string; actor_kind: "human" | "ai" }>(
+      `SELECT u.id, u.actor_kind FROM match_participants p
+       JOIN app_users u ON u.id = p.user_id
+       WHERE p.match_id = $1 ORDER BY u.id ASC`,
+      [matchId]
+    );
+    if (participants.rows.length === 0) throw new RepositoryConflictError("The match has no participants.");
+    if (expectedUserIds && (participants.rows.length !== expectedUserIds.length
+      || new Set(expectedUserIds).size !== expectedUserIds.length
+      || participants.rows.some(({ id }) => !expectedUserIds.includes(id)))) {
+      throw new RepositoryConflictError("A result is required for every unique match participant.");
+    }
+    const aiCount = participants.rows.filter(({ actor_kind }) => actor_kind === "ai").length;
+    return aiCount === 0 ? "human" : aiCount === participants.rows.length ? "ai" : "mixed";
   }
 
   async completeMatchAndUpdateRatings(input: {
@@ -1324,19 +1363,40 @@ export class PostgresApplicationRepository implements ApplicationRepository {
       throw new RepositoryConflictError("A completed match must have exactly one winning participant.");
     }
     return inTransaction(this.pool, async (client) => {
-      const matchLock = await client.query<{ id: string }>(
-        "SELECT id FROM ranking_matches WHERE id = $1 FOR UPDATE",
+      const matchLock = await client.query<{
+        id: string; status: MatchRecord["status"]; match_type: MatchType;
+        winner_user_id: string | null; end_reason: MatchRecord["endReason"];
+      }>(
+        "SELECT id, status, match_type, winner_user_id, end_reason FROM ranking_matches WHERE id = $1 FOR UPDATE",
         [input.matchId]
       );
-      if (!matchLock.rows[0]) throw new RepositoryNotFoundError("The match does not exist.");
-      const userIds = input.participantOutcomes.map(({ userId }) => userId);
+      const match = matchLock.rows[0];
+      if (!match) throw new RepositoryNotFoundError("The match does not exist.");
+      if (match.match_type === "private") throw new RepositoryConflictError("Private matches cannot update ranked ratings.");
+      if (match.status === "completed") {
+        if (match.winner_user_id !== input.winnerUserId || match.end_reason !== input.endReason) {
+          throw new RepositoryConflictError("The match is already completed with a different result.");
+        }
+        const existing = await this.selectMatch(client, "id", input.matchId);
+        if (!existing) throw new RepositoryNotFoundError("The completed match does not exist.");
+        return existing;
+      }
+      if (match.status !== "active") throw new RepositoryConflictError("Only active matches can be completed.");
+      const userIds = input.participantOutcomes.map(({ userId }) => userId).sort();
+      const composition = await this.rankingCompositionForMatch(client, input.matchId, userIds);
+      await client.query(
+        `INSERT INTO player_rankings_by_composition (user_id, composition)
+         SELECT unnest($1::uuid[]), $2
+         ON CONFLICT (user_id, composition) DO NOTHING`,
+        [userIds, composition]
+      );
       const rankings = await client.query<{ user_id: string; rating: number }>(
         `SELECT user_id, rating
-         FROM player_rankings
-         WHERE user_id = ANY($1::uuid[])
+         FROM player_rankings_by_composition
+         WHERE user_id = ANY($1::uuid[]) AND composition = $2
          ORDER BY user_id ASC
          FOR UPDATE`,
-        [userIds]
+        [userIds, composition]
       );
       if (rankings.rows.length !== userIds.length) {
         throw new RepositoryConflictError("Every participant must have an initialized ranking.");
@@ -1346,7 +1406,7 @@ export class PostgresApplicationRepository implements ApplicationRepository {
         ...participant,
         rating: ratings.get(participant.userId) ?? 1000
       })));
-      return this.completeMatchWithResults(client, { ...input, participantResults });
+      return this.completeMatchWithResults(client, { ...input, participantResults }, true, composition);
     });
   }
 
@@ -1405,7 +1465,7 @@ export class PostgresApplicationRepository implements ApplicationRepository {
       scoreDelta: number;
       ratingAfter: number;
     }[];
-  }, updateRankings = true): Promise<MatchRecord> {
+  }, updateRankings = true, composition: RankingComposition = "human"): Promise<MatchRecord> {
     if (input.participantResults.filter(({ outcome }) => outcome === "won").length !== 1
       || input.participantResults.find(({ outcome }) => outcome === "won")?.userId !== input.winnerUserId) {
       throw new RepositoryConflictError("A completed match must have exactly one winning participant.");
@@ -1453,17 +1513,34 @@ export class PostgresApplicationRepository implements ApplicationRepository {
           const drops = result.outcome === "dropped" ? 1 : 0;
           const losses = result.outcome === "lost" ? 1 : 0;
           await client.query(
-            `INSERT INTO player_rankings (user_id, rating, games_played, wins, losses, drops, updated_at)
-             VALUES ($1, $2, 1, $3, $4, $5, $6)
-             ON CONFLICT (user_id) DO UPDATE SET
+            `INSERT INTO player_rankings_by_composition
+               (user_id, composition, rating, games_played, wins, losses, drops, updated_at)
+             VALUES ($1, $2, $3, 1, $4, $5, $6, $7)
+             ON CONFLICT (user_id, composition) DO UPDATE SET
                rating = EXCLUDED.rating,
-               games_played = player_rankings.games_played + 1,
-               wins = player_rankings.wins + EXCLUDED.wins,
-               losses = player_rankings.losses + EXCLUDED.losses,
-               drops = player_rankings.drops + EXCLUDED.drops,
+               games_played = player_rankings_by_composition.games_played + 1,
+               wins = player_rankings_by_composition.wins + EXCLUDED.wins,
+               losses = player_rankings_by_composition.losses + EXCLUDED.losses,
+               drops = player_rankings_by_composition.drops + EXCLUDED.drops,
                updated_at = EXCLUDED.updated_at`,
-            [result.userId, result.ratingAfter, wins, losses, drops, input.endedAt]
+            [result.userId, composition, result.ratingAfter, wins, losses, drops, input.endedAt]
           );
+          // Keep the pre-AI ranking table as a compatible human-only projection.
+          // AI and mixed results must never overwrite a human's original rating.
+          if (composition === "human") {
+            await client.query(
+              `INSERT INTO player_rankings (user_id, rating, games_played, wins, losses, drops, updated_at)
+               VALUES ($1, $2, 1, $3, $4, $5, $6)
+               ON CONFLICT (user_id) DO UPDATE SET
+                 rating = EXCLUDED.rating,
+                 games_played = player_rankings.games_played + 1,
+                 wins = player_rankings.wins + EXCLUDED.wins,
+                 losses = player_rankings.losses + EXCLUDED.losses,
+                 drops = player_rankings.drops + EXCLUDED.drops,
+                 updated_at = EXCLUDED.updated_at`,
+              [result.userId, result.ratingAfter, wins, losses, drops, input.endedAt]
+            );
+          }
         }
       }
       await client.query(
@@ -1477,12 +1554,12 @@ export class PostgresApplicationRepository implements ApplicationRepository {
     return completed;
   }
 
-  async listRankings(input: { cursor?: RankingCursor; limit?: number } = {}): Promise<Page<RankingRecord, RankingCursor>> {
+  async listRankings(input: { cursor?: RankingCursor; limit?: number; composition?: RankingComposition } = {}): Promise<Page<RankingRecord, RankingCursor>> {
     const limit = boundedLimit(input.limit);
     const cursor = input.cursor;
     const parameters: unknown[] = cursor
-      ? [cursor.rating, cursor.wins, cursor.userId, limit + 1]
-      : [limit + 1];
+      ? [cursor.rating, cursor.wins, cursor.userId, limit + 1, input.composition ?? "human"]
+      : [limit + 1, input.composition ?? "human"];
     const cursorClause = cursor
       ? `AND (
            r.rating < $1
@@ -1491,13 +1568,16 @@ export class PostgresApplicationRepository implements ApplicationRepository {
          )`
       : "";
     const limitPlaceholder = cursor ? "$4" : "$1";
+    const compositionPlaceholder = cursor ? "$5" : "$2";
     const result = await this.pool.query<RankingRow>(
       `SELECT r.user_id, p.display_name, p.badge_id, r.rating,
-              r.games_played, r.wins, r.losses, r.drops
-       FROM player_rankings r
+              r.games_played, r.wins, r.losses, r.drops, u.actor_kind, a.model_id
+       FROM player_rankings_by_composition r
        JOIN player_profiles p ON p.user_id = r.user_id
        JOIN app_users u ON u.id = r.user_id
-       WHERE u.email !~ '${syntheticLoadEmailSqlPattern}' ${cursorClause}
+       LEFT JOIN ai_agents a ON a.user_id = r.user_id
+       WHERE r.composition = ${compositionPlaceholder}
+         AND u.email !~ '${syntheticLoadEmailSqlPattern}' ${cursorClause}
        ORDER BY r.rating DESC, r.wins DESC, r.user_id ASC
        LIMIT ${limitPlaceholder}`,
       parameters
