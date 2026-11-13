@@ -57,6 +57,22 @@ describe("Lobby", () => {
     expect(onJoin).toHaveBeenCalledWith(6);
   });
 
+  it("loads the model roster only when the player chooses AI opponents", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input) === "/api/ai/players"
+      ? { enabled: false, players: [], dailyBudgetUsd: 10 }
+      : { invitations: [], createdRooms: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Lobby player={player} onJoin={vi.fn()} onLogout={vi.fn()} onUpdateProfile={vi.fn()} />);
+
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/ai/players")).toBe(false);
+    await user.click(screen.getByRole("button", { name: /AI players.*Choose a model/ }));
+    expect(await screen.findByRole("heading", { name: "AI players are unavailable" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === "/api/ai/players")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: /General match/ }));
+    expect(screen.getByRole("button", { name: /Find a 2-player match/ })).toBeInTheDocument();
+  });
+
   it("lets the signed-in player edit their name, badge, and optional phone", async () => {
     const user = userEvent.setup();
     const onUpdateProfile = vi.fn().mockResolvedValue(undefined);

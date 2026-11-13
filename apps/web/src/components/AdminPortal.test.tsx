@@ -38,6 +38,24 @@ describe("admin portal", () => {
     expect(await screen.findByRole("heading", { name: "Use your administrator passkey" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continue with passkey" })).toBeInTheDocument();
     expect(screen.queryByLabelText(/administrator access code/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "AI arena" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/ai/players")).toBe(false);
+  });
+
+  it("offers AI-only matches only inside the unlocked administrator workspace", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/session") return new Response(JSON.stringify({ authenticated: true, isAdmin: true, adminUnlocked: true, player: { id: "admin-1", email: "admin@example.com", displayName: "Admin", badgeId: "strategist", phone: null, createdAt: 1, updatedAt: 1 } }), { status: 200 });
+      if (url === "/api/admin/overview") return new Response(JSON.stringify({ totalUsers: 0, totalGames: 0, activeGames: 0, completedGames: 0 }), { status: 200 });
+      if (url === "/api/ai/players") return new Response(JSON.stringify({ enabled: false, players: [], dailyBudgetUsd: 10 }), { status: 200 });
+      return new Response(JSON.stringify({ error: "Not found" }), { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AdminPortal />);
+    await user.click(await screen.findByRole("button", { name: "AI arena" }));
+    expect(await screen.findByRole("heading", { name: "AI arena" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "AI players are unavailable" })).toBeInTheDocument();
   });
 
   it("shows a one-time bootstrap flow only before the first passkey exists", async () => {

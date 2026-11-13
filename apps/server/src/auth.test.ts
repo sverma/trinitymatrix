@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AuthService, MockEmailOtpSender, ResendEmailOtpSender, profileUpdateSchema } from "./auth";
+import { createHmac } from "node:crypto";
+import { AuthService, MockEmailOtpSender, ResendEmailOtpSender, profileUpdateSchema, type DurableProfileStore } from "./auth";
 import { MemoryStateStore } from "./persistence";
 
 const options = { otpSecret: "unit-test-otp-secret-value", fixedCode: "123456" };
@@ -178,5 +179,88 @@ describe("email authentication and profile persistence", () => {
       badgeId: "rookie",
       phone: { countryCode: "+999", nationalNumber: "12345678901234" }
     }).success).toBe(false);
+  });
+
+  it.each(["model@ai.trinitymatrix.invalid", "  Model@AI.TrinityMatrix.Invalid  "])(
+    "prevents an AI identity from receiving even a mock OTP", async (email) => {
+      const store = new MemoryStateStore();
+      const set = vi.spyOn(store, "set");
+      const send = vi.fn();
+      const auth = new AuthService({ send }, store, options);
+
+      await expect(auth.requestOtp(email)).rejects.toThrow("AI player identities cannot sign in");
+      expect(send).not.toHaveBeenCalled();
+      expect(set).not.toHaveBeenCalled();
+    }
+  );
+
+  it("rejects and retires an old cached OTP challenge for an AI identity", async () => {
+    const store = new MemoryStateStore();
+    const auth = new AuthService(new MockEmailOtpSender(), store, { ...options, stateEpoch: "ai-v1" });
+    const challengeId = "00000000-0000-4000-8000-000000000011";
+    const email = "model@ai.trinitymatrix.invalid";
+    const key = `auth:challenge:ai-v1:${challengeId}`;
+    await store.set(key, {
+      id: challengeId,
+      email,
+      codeHash: createHmac("sha256", options.otpSecret).update(`${challengeId}\n${email}\n123456`).digest("hex"),
+      expiresAt: Date.now() + 60_000,
+      failedAttempts: 0
+    });
+    const consume = vi.spyOn(store, "consumeChallenge");
+    await expect(auth.verifyOtp(challengeId, "123456", "Impersonator")).resolves.toBeNull();
+    expect(consume).not.toHaveBeenCalled();
+    await expect(store.get(key)).resolves.toBeNull();
+  });
+
+  it("also refuses a reserved AI identity returned by atomic challenge consumption", async () => {
+    const store = new MemoryStateStore();
+    const auth = new AuthService(new MockEmailOtpSender(), store, options);
+    const id = await auth.requestOtp("human@example.com");
+    const challenge = (await store.get<Record<string, unknown>>(`auth:challenge:${id}`))!;
+    vi.spyOn(store, "consumeChallenge").mockResolvedValue({ status: "verified", value: {
+      ...challenge, email: "model@ai.trinitymatrix.invalid"
+    } });
+    await expect(auth.verifyOtp(id, "123456", "Impersonator")).resolves.toBeNull();
+  });
+
+  it("invalidates a forged cached session for an AI profile without consulting a durable override", async () => {
+    const store = new MemoryStateStore();
+    const sessionId = "00000000-0000-4000-8000-000000000021";
+    const playerId = "00000000-0000-4000-8000-000000000022";
+    const now = Date.now();
+    await store.set(`auth:session:${sessionId}`, { id: sessionId, playerId, expiresAt: now + 60_000 });
+    await store.set(`auth:profile:${playerId}`, {
+      id: playerId, email: "model@ai.trinitymatrix.invalid", displayName: "AI Player",
+      badgeId: "strategist", phone: null, createdAt: now, updatedAt: now
+    });
+    const durable: DurableProfileStore = { upsertUserProfile: vi.fn(), getUserProfile: vi.fn() };
+    const auth = new AuthService(new MockEmailOtpSender(), store, options, durable);
+    await expect(auth.getSession(sessionId)).resolves.toBeNull();
+    expect(durable.getUserProfile).not.toHaveBeenCalled();
+    await expect(store.get(`auth:session:${sessionId}`)).resolves.toBeNull();
+  });
+
+  it("rejects durable AI profiles even if a forged cached profile looks human", async () => {
+    const store = new MemoryStateStore();
+    const sessionId = "00000000-0000-4000-8000-000000000031";
+    const playerId = "00000000-0000-4000-8000-000000000032";
+    const now = Date.now();
+    const key = `auth:session:ai-v1:${sessionId}`;
+    await store.set(key, { id: sessionId, playerId, expiresAt: now + 60_000 });
+    await store.set(`auth:profile:${playerId}`, {
+      id: playerId, email: "human@example.com", displayName: "Human Player",
+      badgeId: "rookie", phone: null, createdAt: now, updatedAt: now
+    });
+    const durable: DurableProfileStore = {
+      upsertUserProfile: vi.fn(),
+      getUserProfile: vi.fn().mockResolvedValue({
+        id: playerId, email: "model@ai.trinitymatrix.invalid", displayName: "AI Player",
+        badgeId: "strategist", phone: null, createdAt: new Date(now), updatedAt: new Date(now)
+      })
+    };
+    const auth = new AuthService(new MockEmailOtpSender(), store, { ...options, stateEpoch: "ai-v1" }, durable);
+    await expect(auth.getSession(sessionId)).resolves.toBeNull();
+    await expect(store.get(key)).resolves.toBeNull();
   });
 });

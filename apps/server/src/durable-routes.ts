@@ -26,6 +26,10 @@ const paginationQuerySchema = z.object({
   cursor: z.string().min(1).max(1_024).optional(),
   limit: limitSchema
 }).strict();
+const rankingCompositionSchema = z.enum(["human", "ai", "mixed"]);
+const rankingQuerySchema = paginationQuerySchema.extend({
+  composition: rankingCompositionSchema.default("human")
+});
 const adminUsersQuerySchema = z.object({
   cursor: z.string().min(1).max(1_024).optional(),
   limit: limitSchema,
@@ -54,7 +58,8 @@ const rankingCursorSchema = z.object({
   rating: z.number().int().nonnegative(),
   wins: z.number().int().nonnegative(),
   userId: uuidSchema,
-  rank: z.number().int().nonnegative()
+  rank: z.number().int().nonnegative(),
+  composition: rankingCompositionSchema.default("human")
 }).strict();
 const historyCursorSchema = z.object({
   startedAt: z.string().datetime({ offset: true }),
@@ -518,14 +523,16 @@ export async function registerDurableDataRoutes(app: FastifyInstance, options: D
   app.get("/api/rankings", {
     config: { rateLimit: { max: 120, timeWindow: "1 minute" } }
   }, async (request, reply) => {
-    const query = paginationQuerySchema.safeParse(request.query);
+    const query = rankingQuerySchema.safeParse(request.query);
     if (!query.success) return sendValidationError(reply);
     const cursor = decodeCursor(query.data.cursor, rankingCursorSchema);
     if (query.data.cursor && !cursor) return sendValidationError(reply);
+    if (cursor && cursor.composition !== query.data.composition) return sendValidationError(reply);
     try {
       const page = await repository.listRankings({
         ...(cursor ? { cursor: { rating: cursor.rating, wins: cursor.wins, userId: cursor.userId } } : {}),
-        limit: query.data.limit
+        limit: query.data.limit,
+        composition: query.data.composition
       });
       const startRank = cursor?.rank ?? 0;
       const rankings = page.items.map((entry, index) => ({
@@ -535,10 +542,12 @@ export async function registerDurableDataRoutes(app: FastifyInstance, options: D
         badgeId: entry.badgeId,
         rating: entry.rating,
         wins: entry.wins,
-        gamesPlayed: entry.gamesPlayed
+        gamesPlayed: entry.gamesPlayed,
+        actorKind: entry.actorKind ?? "human",
+        ...(entry.modelId ? { modelId: entry.modelId } : {})
       }));
       const nextCursor: RankingPageCursor | null = page.nextCursor
-        ? { ...page.nextCursor, rank: startRank + page.items.length }
+        ? { ...page.nextCursor, rank: startRank + page.items.length, composition: query.data.composition }
         : null;
       cursorHeader(reply, nextCursor);
       return reply.send({ rankings });

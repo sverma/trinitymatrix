@@ -33,6 +33,33 @@ describe("player portal views", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/rankings", expect.objectContaining({ credentials: "same-origin" }));
   });
 
+  it("loads separate AI and mixed standings and ignores a stale human leaderboard response", async () => {
+    const user = userEvent.setup();
+    let resolveHuman!: (response: Response) => void;
+    const humanRequest = new Promise<Response>((resolve) => { resolveHuman = resolve; });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input) === "/api/rankings") return humanRequest;
+      return Promise.resolve(new Response(JSON.stringify({ rankings: [{
+        rank: 1, playerId: "ai-1", displayName: "Model One", actorKind: "ai", modelId: "provider/model-1", rating: String(input).includes("composition=mixed") ? 1080 : 1020, wins: 2, gamesPlayed: 3
+      }] }), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<RankingsView playerId="p1" />);
+
+    await user.click(screen.getByRole("button", { name: "Mixed matches" }));
+    expect(await screen.findByRole("row", { name: /Model One.*AI.*1080/ })).toBeInTheDocument();
+    expect(screen.getByText(/Humans and AI players ranked together/)).toBeInTheDocument();
+    await act(async () => { resolveHuman(new Response(JSON.stringify({ rankings: [{ rank: 1, playerId: "old", displayName: "Stale player", rating: 900, wins: 0, gamesPlayed: 1 }] }), { status: 200 })); });
+    expect(screen.queryByText("Stale player")).not.toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /Model One.*AI.*1080/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "AI matches" }));
+    expect(await screen.findByRole("row", { name: /Model One.*AI.*1020/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "AI matches" })).toHaveAttribute("aria-pressed", "true");
+    expect(fetchMock).toHaveBeenCalledWith("/api/rankings?composition=ai", expect.objectContaining({ credentials: "same-origin" }));
+    expect(fetchMock).toHaveBeenCalledWith("/api/rankings?composition=mixed", expect.objectContaining({ credentials: "same-origin" }));
+  });
+
   it("opens a completed match with its event replay and post-game chat", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

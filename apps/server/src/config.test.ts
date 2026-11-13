@@ -2,6 +2,17 @@ import { describe, expect, it } from "vitest";
 import { assertServerAuthConfig, authIpRateLimits, loadRuntimeConfig } from "./config";
 
 describe("runtime configuration", () => {
+  it("keeps AI opt-in and caps its shared daily budget at the approved amount", () => {
+    const defaults = loadRuntimeConfig({ OPENROUTER_API_KEY: "" });
+    expect(defaults.aiPlayersEnabled).toBe(false);
+    expect(defaults.aiDailyBudgetUsd).toBe(10);
+    expect(() => loadRuntimeConfig({ AI_DAILY_BUDGET_USD: "10.01" })).toThrow("AI_DAILY_BUDGET_USD");
+    expect(() => loadRuntimeConfig({ AI_DAILY_BUDGET_USD: "0" })).toThrow("AI_DAILY_BUDGET_USD");
+    expect(() => loadRuntimeConfig({ AI_PLAYERS_ENABLED: "true" })).toThrow("requires PostgreSQL");
+    expect(() => loadRuntimeConfig({ AI_PLAYERS_ENABLED: "true", DATABASE_URL: "postgresql://db/trinity", GAMEPLAY_RUNTIME_MODE: "distributed", DURABLE_DATA_REQUIRED: "true" }))
+      .toThrow("single-instance");
+    expect(loadRuntimeConfig({ AI_PLAYERS_ENABLED: "true", DATABASE_URL: "postgresql://db/trinity", AI_DAILY_BUDGET_USD: "2.50" }).aiDailyBudgetUsd).toBe(2.5);
+  });
   it("preserves loopback defaults for local development", () => {
     const config = loadRuntimeConfig({});
     expect(config.host).toBe("127.0.0.1");

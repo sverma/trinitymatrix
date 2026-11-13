@@ -167,10 +167,35 @@ describe("durable data HTTP routes", () => {
       badgeId: "strategist",
       rating: 1_018,
       wins: 1,
-      gamesPlayed: 1
+      gamesPlayed: 1,
+      actorKind: "human"
     }] });
     expect(response.headers["x-next-cursor"]).toEqual(expect.any(String));
     expect(response.body).not.toContain("email");
+    await app.close();
+  });
+
+  it("isolates ranking cursors by match composition and exposes AI identities", async () => {
+    const listRankings = vi.fn(async () => ({
+      items: [{
+        userId: opponentId, displayName: "Model Player", badgeId: "strategist" as const,
+        rating: 1016, gamesPlayed: 1, wins: 1, losses: 0, drops: 0,
+        actorKind: "ai" as const, modelId: "provider/model-version"
+      }],
+      nextCursor: { rating: 1016, wins: 1, userId: opponentId }
+    }));
+    const app = await buildApp(repository({ listRankings }));
+    const response = await app.inject({ method: "GET", url: "/api/rankings?composition=mixed&limit=1" });
+    expect(response.statusCode).toBe(200);
+    expect(listRankings).toHaveBeenCalledWith({ composition: "mixed", limit: 1 });
+    expect(response.json().rankings[0]).toMatchObject({ actorKind: "ai", modelId: "provider/model-version" });
+    const cursor = response.headers["x-next-cursor"];
+    const mismatched = await app.inject({ method: "GET", url: `/api/rankings?composition=ai&cursor=${cursor}` });
+    expect(mismatched.statusCode).toBe(400);
+    expect(listRankings).toHaveBeenCalledTimes(1);
+    const nextPage = await app.inject({ method: "GET", url: `/api/rankings?composition=mixed&cursor=${cursor}` });
+    expect(nextPage.statusCode).toBe(200);
+    expect(nextPage.json().rankings[0].rank).toBe(2);
     await app.close();
   });
 

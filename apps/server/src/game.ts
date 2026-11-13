@@ -19,6 +19,8 @@ export type GameSeat = {
   id: string;
   displayName: string;
   badgeId: ProfileBadgeId;
+  actorKind?: "human" | "ai" | undefined;
+  aiModelId?: string | undefined;
   connected: boolean;
   status: "playing" | "dropped" | "declared";
   detached: boolean;
@@ -78,6 +80,8 @@ export const rankingGameSnapshotSchema = z.object({
     id: z.string(),
     displayName: z.string(),
     badgeId: profileBadgeSchema.optional().default("rookie"),
+    actorKind: z.enum(["human", "ai"]).optional(),
+    aiModelId: z.string().min(1).max(200).optional(),
     connected: z.boolean(),
     status: z.enum(["playing", "dropped", "declared"]).optional().default("playing"),
     detached: z.boolean().optional().default(false)
@@ -129,7 +133,7 @@ export class RankingGame {
   readonly toss: TossResult | null;
 
   constructor(
-    players: readonly { id: string; displayName: string; badgeId?: ProfileBadgeId }[],
+    players: readonly { id: string; displayName: string; badgeId?: ProfileBadgeId; actorKind?: "human" | "ai"; aiModelId?: string }[],
     randomIndex = (maximum: number) => randomInt(maximum),
     restored?: RankingGameSnapshot
   ) {
@@ -274,6 +278,8 @@ export class RankingGame {
       id: seat.id,
       displayName: seat.displayName,
       badgeId: seat.badgeId,
+      ...(seat.actorKind ? { actorKind: seat.actorKind } : {}),
+      ...(seat.aiModelId ? { aiModelId: seat.aiModelId } : {}),
       connected: seat.connected,
       cardCount: seat.status === "playing" ? this.hands.get(seat.id)!.length : 0,
       status: seat.status

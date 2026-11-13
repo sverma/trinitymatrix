@@ -4,8 +4,9 @@ import { api, type AuthPlayer, type ProfileUpdate, type RealtimeChatMessage } fr
 import { MatchHistoryView, RankingsView, type PlayerSection } from "./PlayerViews";
 import { ProfileDialog } from "./ProfileDialog";
 import { PolicyFooter } from "./PolicyPages";
+import { AiPlayers } from "./AiPlayers";
 
-type PlayMode = "general" | "private";
+type PlayMode = "general" | "private" | "ai";
 
 function mergeByRoomCode<T extends { roomCode: string }>(current: T[], incoming: readonly T[]) {
   const valid = (entry: T | null | undefined): entry is T =>
@@ -39,7 +40,8 @@ export function Lobby({
   realtimeChatMessages = [],
   realtimePrivateInvitations = [],
   realtimePrivateRooms = [],
-  connectionGeneration = 0
+  connectionGeneration = 0,
+  connected = true
 }: {
   player: AuthPlayer;
   onJoin: (count: PlayerCount) => void;
@@ -54,6 +56,7 @@ export function Lobby({
   realtimePrivateInvitations?: readonly PrivateInvitation[];
   realtimePrivateRooms?: readonly PrivateRoom[];
   connectionGeneration?: number;
+  connected?: boolean;
 }) {
   const [playMode, setPlayMode] = useState<PlayMode>("general");
   const [playerCount, setPlayerCount] = useState<PlayerCount>(2);
@@ -220,13 +223,14 @@ export function Lobby({
       <div className="match-mode-switch" role="group" aria-label="Match type">
         <button type="button" className={playMode === "general" ? "active" : ""} aria-pressed={playMode === "general"} onClick={() => setPlayMode("general")}><strong>General match</strong><span>Ranked matchmaking</span></button>
         <button type="button" className={playMode === "private" ? "active" : ""} aria-pressed={playMode === "private"} onClick={() => setPlayMode("private")}><strong>Private table</strong><span>Invite-only · Unranked</span></button>
+        <button type="button" className={playMode === "ai" ? "active" : ""} aria-pressed={playMode === "ai"} onClick={() => setPlayMode("ai")}><strong>AI players</strong><span>Choose a model · Ranked</span></button>
       </div>
 
       {privateLoading && <p className="private-load-status" role="status">Checking private invitations…</p>}
       {privateError && <p className="private-lobby-message error" role="alert">{privateError}</p>}
       {privateNotice && <p className="private-lobby-message" role="status">{privateNotice}</p>}
 
-      {playMode === "general" ? <form className="mode-panel" onSubmit={(event) => { event.preventDefault(); onJoin(playerCount); }}>
+      {playMode === "ai" ? <AiPlayers connected={connected} privateTableOpen={hasOpenPrivateCommitment} /> : playMode === "general" ? <form className="mode-panel" onSubmit={(event) => { event.preventDefault(); onJoin(playerCount); }}>
         <div className="mode-summary"><span>Mode</span><strong>Ranking</strong></div>
         <div className="mode-summary"><span>Variant</span><strong>Points</strong></div>
         <fieldset><legend>Number of players</legend><div className="seat-grid">

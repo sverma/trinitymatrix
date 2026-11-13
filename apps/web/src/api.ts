@@ -70,6 +70,28 @@ export type RankingEntry = {
   rating: number;
   wins: number;
   gamesPlayed: number;
+  actorKind?: "human" | "ai";
+  modelId?: string | null;
+};
+
+export type RankingComposition = "human" | "ai" | "mixed";
+
+export type AiPlayer = {
+  id: string;
+  displayName: string;
+  modelId: string;
+  modelName: string;
+  available: boolean;
+  reason?: string;
+  rating: number;
+  gamesPlayed: number;
+  wins: number;
+};
+
+export type AiPlayerRoster = {
+  enabled: boolean;
+  players: AiPlayer[];
+  dailyBudgetUsd: number;
 };
 
 export type MatchHistoryEntry = {
@@ -297,7 +319,20 @@ export const api = {
     throw new Error(body.error ?? "Could not cancel the private table.");
   },
   logout: () => fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }),
-  rankings: () => jsonRequest<CollectionResponse<"rankings", RankingEntry>>("/api/rankings"),
+  rankings: (composition?: RankingComposition) => jsonRequest<CollectionResponse<"rankings", RankingEntry>>(
+    `/api/rankings${composition ? `?composition=${composition}` : ""}`
+  ),
+  aiPlayers: (signal?: AbortSignal) => jsonRequest<AiPlayerRoster>("/api/ai/players", signal ? { signal } : undefined),
+  startAiMatch: (agentIds: string[]) => jsonRequest<{ gameId: string }>("/api/ai/matches", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ agentIds })
+  }),
+  startAdminAiMatch: (agentIds: string[]) => jsonRequest<{ gameId: string }>("/api/admin/ai/matches", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ agentIds })
+  }),
   matchHistory: (signal?: AbortSignal) => jsonRequest<CollectionResponse<"games", MatchHistoryEntry>>(
     "/api/me/history",
     signal ? { signal } : undefined

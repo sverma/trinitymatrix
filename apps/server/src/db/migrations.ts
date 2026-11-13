@@ -5,6 +5,7 @@ import distributedGameRuntime from "../../migrations/0004_distributed_game_runti
 import matchmakingTicketLiveness from "../../migrations/0005_matchmaking_ticket_liveness.sql";
 import replayExports from "../../migrations/0006_replay_exports.sql";
 import adminPasskeys from "../../migrations/0007_admin_passkeys.sql";
+import modelBoundAiPlayers from "../../migrations/0008_model_bound_ai_players.sql";
 import type { SqlMigration } from "./migrate";
 
 export const sqlMigrations: readonly SqlMigration[] = [
@@ -14,5 +15,6 @@ export const sqlMigrations: readonly SqlMigration[] = [
   { name: "0004_distributed_game_runtime.sql", sql: distributedGameRuntime },
   { name: "0005_matchmaking_ticket_liveness.sql", sql: matchmakingTicketLiveness },
   { name: "0006_replay_exports.sql", sql: replayExports },
-  { name: "0007_admin_passkeys.sql", sql: adminPasskeys }
+  { name: "0007_admin_passkeys.sql", sql: adminPasskeys },
+  { name: "0008_model_bound_ai_players.sql", sql: modelBoundAiPlayers }
 ];

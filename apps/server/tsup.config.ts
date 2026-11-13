@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     "db/migrate-cli": "src/db/migrate-cli.ts",
+    "ops/ai-check": "src/ai-check-cli.ts",
     "ops/load-run": "../../tests/load/run.mjs"
   },
   format: ["esm"],

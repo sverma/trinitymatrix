@@ -469,6 +469,8 @@ export function GameTable({
   });
 
   const opponents = game.players.filter(({ id }) => id !== playerId);
+  const aiPlayers = game.players.filter((player) => player.actorKind === "ai");
+  const rankedTableLabel = aiPlayers.length === 0 ? "General" : aiPlayers.length === game.players.length ? "AI" : "Mixed";
   const currentName = game.players.find(({ id }) => id === game.currentPlayerId)?.displayName ?? "Current player";
   const showCard = currentLayout.showCardId ? byId.get(currentLayout.showCardId) : null;
   const pendingShowCard = pendingShowId ? byId.get(pendingShowId) : null;
@@ -487,7 +489,7 @@ export function GameTable({
 
   return <main id="main-content" className={`game-shell ${isMyTurn ? "my-turn" : ""} ${showdown ? "showdown" : ""}`.trim()}>
     <header className="game-header">
-      <div><span className="eyebrow">{game.matchType === "private" ? "Private · unranked" : "General · ranked"} · {game.playerCount} players</span><strong>Table {game.gameId.slice(0, 8)}</strong></div>
+      <div><span className="eyebrow">{game.matchType === "private" ? "Private · unranked" : `${rankedTableLabel} · ranked`} · {game.playerCount} players</span><strong>Table {game.gameId.slice(0, 8)}</strong></div>
       <div className="game-header-actions">
         <div className="turn-status">
           <span className="turn-owner" aria-live="polite">{showdown
@@ -539,11 +541,17 @@ export function GameTable({
       </div>
     </header>
 
+    {aiPlayers.length > 0 && <details className="ai-table-models">
+      <summary>AI players and models</summary>
+      <ul>{aiPlayers.map((player) => <li key={player.id}><strong>{player.displayName}</strong><span>AI player</span><code>{player.aiModelId ?? "Model unavailable"}</code></li>)}</ul>
+      <p>Results at this table count toward {rankedTableLabel.toLowerCase()}-match ratings.</p>
+    </details>}
+
     <section className="table-surface" aria-label="Trinity table">
       <ol className={`opponent-list opponents-${opponents.length}`} aria-label="Other players">
-        {opponents.map((player, index) => <li key={player.id} className={`${game.phase === "playing" && player.id === game.currentPlayerId ? "active" : ""} ${player.status === "dropped" ? "dropped" : player.status === "declared" ? "declared" : ""}`} aria-label={`${player.displayName}, ${game.phase === "playing" && player.id === game.currentPlayerId ? "current turn, " : ""}${player.status === "dropped" ? "dropped" : player.status === "declared" ? "declared" : showdown?.pendingPlayerIds.includes(player.id) ? "arranging hand" : showdown?.submittedPlayerIds.includes(player.id) ? "hand submitted" : player.connected ? `${player.cardCount} cards` : "reconnecting"}`} style={{ "--seat": index } as CSSProperties}>
+        {opponents.map((player, index) => <li key={player.id} className={`${game.phase === "playing" && player.id === game.currentPlayerId ? "active" : ""} ${player.status === "dropped" ? "dropped" : player.status === "declared" ? "declared" : ""}`} aria-label={`${player.displayName}, ${player.actorKind === "ai" ? `AI player using ${player.aiModelId ?? "a configured model"}, ` : ""}${game.phase === "playing" && player.id === game.currentPlayerId ? "current turn, " : ""}${player.status === "dropped" ? "dropped" : player.status === "declared" ? "declared" : showdown?.pendingPlayerIds.includes(player.id) ? "arranging hand" : showdown?.submittedPlayerIds.includes(player.id) ? "hand submitted" : player.connected ? `${player.cardCount} cards` : "reconnecting"}`} style={{ "--seat": index } as CSSProperties}>
           <span className="avatar" aria-hidden="true">{badgeSymbols.get(player.badgeId) ?? "🌱"}</span>
-          <span>{player.displayName}<small>{player.status === "dropped" ? "Dropped" : player.status === "declared" ? "Declared" : showdown?.pendingPlayerIds.includes(player.id) ? "Arranging hand" : showdown?.submittedPlayerIds.includes(player.id) ? "Hand submitted" : game.phase === "playing" && player.id === game.currentPlayerId ? "Playing now" : player.connected ? `${player.cardCount} cards` : "Reconnecting"}</small></span>
+          <span>{player.displayName}{player.actorKind === "ai" && <small className="ai-table-badge">AI player</small>}<small>{player.status === "dropped" ? "Dropped" : player.status === "declared" ? "Declared" : showdown?.pendingPlayerIds.includes(player.id) ? "Arranging hand" : showdown?.submittedPlayerIds.includes(player.id) ? "Hand submitted" : game.phase === "playing" && player.id === game.currentPlayerId ? "Playing now" : player.connected ? `${player.cardCount} cards` : "Reconnecting"}</small></span>
         </li>)}
       </ol>
 

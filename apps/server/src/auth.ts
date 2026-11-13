@@ -162,6 +162,11 @@ export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
+/** AI seats use non-deliverable identities and never enter the public OTP flow. */
+export function isAiPlayerEmail(email: string): boolean {
+  return normalizeEmail(email).endsWith("@ai.trinitymatrix.invalid");
+}
+
 function emailPlayerKey(email: string): string {
   return `auth:email-player:${createHash("sha256").update(email).digest("hex")}`;
 }
@@ -200,6 +205,7 @@ export class AuthService {
 
   async requestOtp(requestedEmail: string): Promise<string> {
     const email = normalizeEmail(requestedEmail);
+    if (isAiPlayerEmail(email)) throw new Error("AI player identities cannot sign in.");
     const id = randomUUID();
     const code = this.options.fixedCode ?? randomInt(0, 1_000_000).toString().padStart(6, "0");
     const challenge: Challenge = {
@@ -224,6 +230,10 @@ export class AuthService {
     const parsedChallenge = challengeSchema.safeParse(storedChallenge);
     const challenge = parsedChallenge.success ? parsedChallenge.data : null;
     if (!challenge) return null;
+    if (isAiPlayerEmail(challenge.email)) {
+      await this.store.delete(this.transientKey("challenge", challengeId));
+      return null;
+    }
     const consumed = await this.store.consumeChallenge<unknown>(
       this.transientKey("challenge", challengeId),
       this.codeHash(challenge.id, challenge.email, code),
@@ -232,7 +242,7 @@ export class AuthService {
     );
     if (consumed.status !== "verified") return null;
     const verifiedChallenge = challengeSchema.safeParse(consumed.value);
-    if (!verifiedChallenge.success) return null;
+    if (!verifiedChallenge.success || isAiPlayerEmail(verifiedChallenge.data.email)) return null;
 
     const profile = await this.getOrCreateProfile(verifiedChallenge.data.email, requestedName);
     const storedSession: StoredSession = {
@@ -316,9 +326,14 @@ export class AuthService {
       return null;
     }
     let storedProfile = await this.store.get<unknown>(profileKey(session.playerId));
+    const cachedProfile = playerProfileSchema.safeParse(storedProfile);
+    if (cachedProfile.success && isAiPlayerEmail(cachedProfile.data.email)) {
+      await this.store.delete(this.transientKey("session", id));
+      return null;
+    }
     if (this.durableProfiles) {
       const durable = await this.durableProfiles.getUserProfile(session.playerId);
-      if (!durable || durable.suspendedAt) {
+      if (!durable || durable.suspendedAt || isAiPlayerEmail(durable.email)) {
         await this.store.delete(this.transientKey("session", id));
         return null;
       }
@@ -326,7 +341,7 @@ export class AuthService {
       await this.store.set(profileKey(session.playerId), storedProfile);
     }
     const profile = playerProfileSchema.safeParse(storedProfile);
-    if (!profile.success) {
+    if (!profile.success || isAiPlayerEmail(profile.data.email)) {
       await this.store.delete(this.transientKey("session", id));
       return null;
     }

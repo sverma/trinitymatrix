@@ -102,6 +102,8 @@ export const publicPlayerSchema = z.object({
   id: z.string(),
   displayName: z.string(),
   badgeId: profileBadgeSchema,
+  actorKind: z.enum(["human", "ai"]).optional(),
+  aiModelId: z.string().min(1).max(200).optional(),
   connected: z.boolean(),
   cardCount: z.number().int().nonnegative(),
   status: z.enum(["playing", "dropped", "declared"])
