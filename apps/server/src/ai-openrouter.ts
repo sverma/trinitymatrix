@@ -12,7 +12,8 @@ import {
 export const AI_REQUEST_RESERVATION_USD = 0.05;
 export const AI_MAX_REQUEST_BYTES = 24_000;
 export const AI_MAX_RESPONSE_BYTES = 64_000;
-export const AI_MAX_OUTPUT_TOKENS = 1_200;
+export const AI_MAX_OUTPUT_TOKENS = 1_600;
+export const AI_MAX_DECISION_TIME_MS = 20_000;
 
 const endpoint = "https://openrouter.ai/api/v1/chat/completions";
 const strictCard = cardSchema.strict();
@@ -114,10 +115,12 @@ function decisionJsonSchema(observation: AiAgentObservation) {
       action: { type: "string", enum: actions },
       cardId: cardRequired
         ? { type: "string", enum: cardIds, description: "Choose the exact owned card ID to discard." }
-        : { type: "null", description: "No card is discarded by this action." },
-      groups: { type: "array", maxItems: 14, items: { type: "array", minItems: 1, maxItems: 14,
+        // Nullable strings are portable through Gemini's JSON-schema mapping;
+        // the local validator still requires an actual null in these stages.
+        : { type: ["string", "null"], description: "Return null. No card is discarded by this action." },
+      groups: { type: "array", maxItems: 14, items: { type: "array", minItems: cardRequired ? 3 : 1, maxItems: 14,
         items: { type: "string", enum: cardIds } } },
-      memory: { type: "string", description: "Concise persistent factual memory or strategy summary, max 4000 characters." }
+      memory: { type: "string", description: "Concise persistent factual memory or strategy summary: one short sentence, at most 512 characters." }
     },
     required: ["action", "cardId", "groups", "memory"],
     additionalProperties: false
@@ -126,6 +129,7 @@ function decisionJsonSchema(observation: AiAgentObservation) {
 
 /** Keep reasoning inside the shared output/turn budget without changing models. */
 function modelReasoningOptions(modelId: string) {
+  if (modelId === "google/gemini-3.8-flash") return { effort: "low", exclude: true };
   if (modelId === "deepseek/deepseek-v4.1-flash-1017") return { effort: "low", exclude: true };
   if (modelId === "mistralai/mistral-large-4-0") return { enabled: false, exclude: true };
   if (modelId === "qwen/qwen3.8-flash") return { max_tokens: 256, exclude: true };
@@ -217,16 +221,16 @@ export class OpenRouterAgentClient {
 
   constructor(options: { apiKey: string; fetch?: typeof fetch; timeoutMs?: number }) {
     if (!options.apiKey || /\s/.test(options.apiKey) || options.apiKey.length > 1_024
-      || (options.timeoutMs !== undefined && (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > 15_000))) {
+      || (options.timeoutMs !== undefined && (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > AI_MAX_DECISION_TIME_MS))) {
       throw new OpenRouterAgentError("configuration");
     }
     this.apiKey = options.apiKey;
     this.fetcher = options.fetch ?? fetch;
-    this.timeoutMs = options.timeoutMs ?? 15_000;
+    this.timeoutMs = options.timeoutMs ?? AI_MAX_DECISION_TIME_MS;
   }
 
   async decide(input: { modelId: string; observation: AiAgentObservation; memory: string; timeoutMs?: number }): Promise<AiAgentDecisionResult> {
-    if (input.timeoutMs !== undefined && (!Number.isInteger(input.timeoutMs) || input.timeoutMs < 1 || input.timeoutMs > 15_000)) {
+    if (input.timeoutMs !== undefined && (!Number.isInteger(input.timeoutMs) || input.timeoutMs < 1 || input.timeoutMs > AI_MAX_DECISION_TIME_MS)) {
       throw new OpenRouterAgentError("configuration");
     }
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*\/[a-zA-Z0-9][a-zA-Z0-9._:-]{0,179}$/.test(input.modelId)

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { clientMessageSchema, type ClientMessage, type ServerMessage } from "@trinitymatrix/protocol";
 import { Matchmaker, type GameplaySocket, type AiForfeitNotice } from "./matchmaker";
 import type { AiIdentity, AiStore } from "./ai-repository";
-import { OpenRouterAgentError, type AiAgentDecision, type AiAgentDecisionResult, type AiAgentObservation } from "./ai-openrouter";
+import { AI_MAX_DECISION_TIME_MS, OpenRouterAgentError, type AiAgentDecision, type AiAgentDecisionResult, type AiAgentObservation } from "./ai-openrouter";
 
 type GameCommand = Extract<ClientMessage, { type: `game.${string}` }>;
 type ModelClient = {
@@ -265,7 +265,7 @@ export class AiPlayers {
       await this.store.finishRequest(requestId, 0, false);
       return;
     }
-    const timeoutMs = Math.min(15_000, this.remainingTime(observation));
+    const timeoutMs = Math.min(AI_MAX_DECISION_TIME_MS, this.remainingTime(observation));
     if (timeoutMs <= 1_000) {
       await this.store.finishRequest(requestId, 0, false);
       this.recover(agent, observation, "turn-deadline", "The turn deadline is too close for another model request.");

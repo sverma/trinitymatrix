@@ -119,7 +119,7 @@ describe("operator full-turn model qualification", () => {
     expect(report).toMatchObject({ status: "failed", turnsCompleted: 0, turnsMissed: 1, requests: 4,
       draws: 1, discards: 0, retries: 2, forcedDrops: 0, maxTurnDurationMs: 45_000,
       errors: { timeout: 3, "turn-deadline": 1 } });
-    expect(createClient.mock.calls.map(([timeout]) => timeout)).toEqual([15_000, 15_000, 15_000, 3_000]);
+    expect(createClient.mock.calls.map(([timeout]) => timeout)).toEqual([20_000, 20_000, 15_000, 3_000]);
     expect(new Set(decide.mock.calls.map(([input]) => input.observation.state.turnEndsAt)).size).toBe(1);
     expect(ledger.saveMemory).not.toHaveBeenCalled();
   });

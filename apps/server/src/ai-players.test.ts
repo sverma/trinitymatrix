@@ -369,13 +369,13 @@ describe("persistent model players", () => {
   it("shrinks the retry timeout to the remaining normal turn deadline", async () => {
     const model = client();
     model.decide.mockImplementationOnce(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 15_000));
+      await new Promise((resolve) => setTimeout(resolve, 20_000));
       throw new OpenRouterAgentError("timeout");
     });
-    const { matchmaker } = await fixture({ drawn: true, deadlineMs: 18_000, model });
-    await vi.advanceTimersByTimeAsync(15_002);
+    const { matchmaker } = await fixture({ drawn: true, deadlineMs: 23_000, model });
+    await vi.advanceTimersByTimeAsync(20_002);
     expect(model.decide).toHaveBeenCalledTimes(2);
-    expect(model.decide.mock.calls[0]![0].timeoutMs).toBe(15_000);
+    expect(model.decide.mock.calls[0]![0].timeoutMs).toBe(20_000);
     expect(model.decide.mock.calls[1]![0].timeoutMs).toBeGreaterThan(1_000);
     expect(model.decide.mock.calls[1]![0].timeoutMs).toBeLessThanOrEqual(2_000);
     expect(matchmaker.agentView(aiId)?.state.currentPlayerId).toBe(humanId);

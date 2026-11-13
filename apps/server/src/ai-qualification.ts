@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AiAgentDecisionResult, AiAgentObservation } from "./ai-openrouter";
-import { OpenRouterAgentError } from "./ai-openrouter";
+import { AI_MAX_DECISION_TIME_MS, OpenRouterAgentError } from "./ai-openrouter";
 import type { AiIdentity, AiStore } from "./ai-repository";
 import { decisionCommand } from "./ai-players";
 import { RankingGame } from "./game";
@@ -127,7 +127,7 @@ export async function qualifyAiModel(options: {
         record("turn-deadline"); report.status = "failed"; break;
       }
       let client: QualificationClient;
-      try { client = options.createClient(Math.min(15_000, afterReservationMs)); }
+      try { client = options.createClient(Math.min(AI_MAX_DECISION_TIME_MS, afterReservationMs)); }
       catch {
         try { await ledger.finishRequest(requestId, 0, false); } catch { record("ledger-unavailable"); }
         record("client-configuration"); report.status = "failed"; break;

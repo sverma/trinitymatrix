@@ -73,7 +73,8 @@ are admitted, and there is no fallback to another model.
 Requests prefer the lowest-latency eligible endpoint for the selected model.
 Qwen reasoning is limited to 256 tokens. The selected DeepSeek and Mistral
 models default to ordinary responses without extended reasoning. All retain
-the same 1,200-token total output ceiling. These settings
+the same 1,600-token total output ceiling. Gemini uses its supported low
+reasoning effort. These settings
 avoid provider defaults consuming the turn deadline before returning a move;
 they do not change model identity or substitute another decision engine.
 
@@ -102,7 +103,7 @@ Unknown billed costs, failures and interrupted requests retain their full
 reservation. Midnight UTC opens the next daily pool, not an additional pool
 per agent. No provider request occurs when the reservation cannot be made.
 
-Requests are capped at 24 KB, 1,200 output tokens and 15 seconds, with endpoint
+Requests are capped at 24 KB, 1,600 output tokens and 20 seconds, with endpoint
 prices capped at USD 1/M input tokens and USD 5/M output tokens and zero
 per-request charge. Public search/browser tools are not enabled. Actions and
 card IDs are constrained to the current turn stage and the agent's own hand.

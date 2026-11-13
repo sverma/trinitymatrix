@@ -3,6 +3,7 @@ import type { Card } from "@trinitymatrix/protocol";
 import { validateDeclaration } from "@trinitymatrix/game-domain";
 import {
   AI_MAX_OUTPUT_TOKENS,
+  AI_MAX_DECISION_TIME_MS,
   AI_MAX_REQUEST_BYTES,
   AI_MAX_RESPONSE_BYTES,
   AI_REQUEST_RESERVATION_USD,
@@ -117,7 +118,7 @@ describe("model-bound OpenRouter player", () => {
     { id: "mistralai/mistral-large-4-0", reasoning: { enabled: false, exclude: true } },
     { id: "qwen/qwen3.8-flash", reasoning: { max_tokens: 256, exclude: true } },
     { id: "anthropic/claude-haiku-5.5", reasoning: undefined },
-    { id: "google/gemini-3.8-flash", reasoning: undefined },
+    { id: "google/gemini-3.8-flash", reasoning: { effort: "low", exclude: true } },
     { id: "deepseek/other-model", reasoning: undefined },
     { id: "mistralai/other-model", reasoning: undefined },
     { id: "qwen/other-model", reasoning: undefined }
@@ -218,11 +219,32 @@ describe("model-bound OpenRouter player", () => {
     const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
     const schema = body.response_format.json_schema.schema;
     expect(schema.properties.action.enum).toEqual(actions);
-    expect(schema.properties.cardId.type).toBe(cardRequired ? "string" : "null");
+    expect(schema.properties.cardId.type).toEqual(cardRequired ? "string" : ["string", "null"]);
     if (cardRequired) expect(schema.properties.cardId.enum).toEqual(view.hand.map(({ id }) => id));
+    else expect(schema.properties.cardId).not.toHaveProperty("enum");
     expect(schema.properties.groups).toMatchObject({ maxItems: 14, items: {
-      maxItems: 14, items: { enum: view.hand.map(({ id }) => id) }
+      minItems: cardRequired ? 3 : 1, maxItems: 14, items: { enum: view.hand.map(({ id }) => id) }
     } });
+    expect(schema.properties.memory.description).toContain("at most 512 characters");
+    expect(schema.properties.memory).not.toHaveProperty("maxLength");
+  });
+
+  it("uses Gemini-compatible nullable string transport for a draw while still requiring actual null locally", async () => {
+    const geminiId = "google/gemini-3.8-flash";
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      const cardSchema = body.response_format.json_schema.schema.properties.cardId;
+      if (cardSchema.type === "null" || cardSchema.enum?.includes(null)) return new Response("Unsupported null-only schema", { status: 400 });
+      expect(cardSchema.type).toEqual(["string", "null"]);
+      expect(cardSchema.description).toContain("Return null");
+      return jsonResponse(providerBody(decision(), { model: geminiId }));
+    });
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await expect(client.decide({ modelId: geminiId, observation: observation(), memory: "" }))
+      .resolves.toMatchObject({ modelId: geminiId, decision: { action: "draw-stock", cardId: null } });
+    fetcher.mockImplementation(async () => jsonResponse(providerBody(decision({ cardId: "own-0" }), { model: geminiId })));
+    await expect(client.decide({ modelId: geminiId, observation: observation(), memory: "" }))
+      .rejects.toMatchObject({ code: "invalid-decision" });
   });
 
   it("offers discard-pile drawing only when a visible card exists", async () => {
@@ -317,8 +339,8 @@ describe("model-bound OpenRouter player", () => {
   });
 
   it.each([
-    { configured: 15_000, requested: 5, effective: 5 },
-    { configured: 5, requested: 15_000, effective: 5 }
+    { configured: AI_MAX_DECISION_TIME_MS, requested: 5, effective: 5 },
+    { configured: 5, requested: AI_MAX_DECISION_TIME_MS, effective: 5 }
   ])("honors the shorter per-call deadline and constructor upper bound", async ({ configured, requested, effective }) => {
     vi.useFakeTimers();
     try {
@@ -339,12 +361,32 @@ describe("model-bound OpenRouter player", () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it.each([0, 15_001, NaN, 1.5])("rejects an invalid per-call timeout before contacting the provider", async (timeoutMs) => {
+  it.each([0, AI_MAX_DECISION_TIME_MS + 1, NaN, 1.5])("rejects an invalid per-call timeout before contacting the provider", async (timeoutMs) => {
     const fetcher = vi.fn<typeof fetch>();
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
     await expect(client.decide({ modelId, observation: observation(), memory: "", timeoutMs }))
       .rejects.toMatchObject({ code: "configuration" });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("defaults to the bounded 20-second decision window", async () => {
+    vi.useFakeTimers();
+    try {
+      let signal: AbortSignal | null | undefined;
+      const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+        signal = init?.signal;
+        return await new Promise<Response>(() => undefined);
+      });
+      const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+      const waiting = expect(client.decide({ modelId, observation: observation(), memory: "" }))
+        .rejects.toMatchObject({ code: "timeout" });
+      expect(AI_MAX_DECISION_TIME_MS).toBe(20_000);
+      await vi.advanceTimersByTimeAsync(AI_MAX_DECISION_TIME_MS - 1);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await waiting;
+      expect(signal?.aborted).toBe(true);
+    } finally { vi.useRealTimers(); }
   });
 
   it("cancels pending requests immediately while permitting later requests after a restart", async () => {
