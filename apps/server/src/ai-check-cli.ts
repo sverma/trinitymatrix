@@ -22,7 +22,11 @@ const client = new OpenRouterAgentClient({ apiKey: config.openRouterApiKey });
 let failures = 0;
 try {
   await store.provision();
-  for (const identity of await store.listAgents()) {
+  const identities = await store.listAgents();
+  const selected = process.argv.slice(2);
+  if (selected.some((id) => !identities.some(({ modelId }) => modelId === id))) throw new Error("Select models from the configured AI roster.");
+  for (const identity of identities) {
+    if (selected.length && !selected.includes(identity.modelId)) continue;
     if (!identity.enabled) continue;
     const fixture = new RankingGame([
       { id: identity.id, displayName: identity.displayName, actorKind: "ai", aiModelId: identity.modelId },

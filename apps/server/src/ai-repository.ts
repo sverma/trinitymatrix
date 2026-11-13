@@ -6,9 +6,9 @@ export const AI_REQUEST_RESERVATION_USD = 0.05;
 export const INITIAL_AI_ROSTER = [
   { modelId: "anthropic/claude-haiku-5.5", modelName: "Claude Haiku 5.5", displayName: "Haiku AI" },
   { modelId: "google/gemini-3.8-flash", modelName: "Gemini 3.8 Flash", displayName: "Gemini AI" },
-  { modelId: "deepseek/deepseek-v4.1-flash-1017", modelName: "DeepSeek V4.1 Flash 1017", displayName: "DeepSeek AI" },
+  { modelId: "deepseek/deepseek-v3.2", modelName: "DeepSeek V3.2", displayName: "DeepSeek AI" },
   { modelId: "qwen/qwen3.8-flash", modelName: "Qwen3.8 Flash", displayName: "Qwen AI" },
-  { modelId: "mistralai/mistral-large-4-0", modelName: "Mistral Large 4", displayName: "Mistral AI" }
+  { modelId: "mistralai/mistral-small-2603", modelName: "Mistral Small 4", displayName: "Mistral AI" }
 ] as const;
 
 export type AiIdentity = {
@@ -71,7 +71,8 @@ export class PostgresAiStore implements AiStore {
         COALESCE(r.wins,0)::integer AS wins
       FROM ai_agents a JOIN player_profiles p ON p.user_id=a.user_id JOIN app_users u ON u.id=a.user_id
       LEFT JOIN player_rankings_by_composition r ON r.user_id=a.user_id AND r.composition='mixed'
-      WHERE a.prompt_version=$1 ORDER BY p.display_name, a.user_id`, [AI_PROMPT_VERSION]);
+      WHERE a.prompt_version=$1 AND a.model_id=ANY($2::text[]) ORDER BY p.display_name, a.user_id`,
+    [AI_PROMPT_VERSION, INITIAL_AI_ROSTER.map(({ modelId }) => modelId)]);
     return result.rows.map((r) => ({ id: r.user_id, displayName: r.display_name, modelId: r.model_id,
       modelName: r.model_name, memory: r.memory, enabled: r.enabled, rating: r.rating, gamesPlayed: r.games_played, wins: r.wins }));
   }

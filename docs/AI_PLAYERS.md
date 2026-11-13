@@ -14,9 +14,9 @@ The initial roster was checked against OpenRouter's public catalog on
 | --- | --- |
 | Haiku AI | `anthropic/claude-haiku-5.5` |
 | Gemini AI | `google/gemini-3.8-flash` |
-| DeepSeek AI | `deepseek/deepseek-v4.1-flash-1017` |
+| DeepSeek AI | `deepseek/deepseek-v3.2` |
 | Qwen AI | `qwen/qwen3.8-flash` |
-| Mistral AI | `mistralai/mistral-large-4-0` |
+| Mistral AI | `mistralai/mistral-small-2603` |
 
 Model IDs and prompt version are immutable database fields. A new model/prompt
 version requires a new player identity so its ranking does not silently inherit
@@ -71,9 +71,9 @@ five minutes. Only structured-output models within the configured price caps
 are admitted, and there is no fallback to another model.
 
 Requests prefer the lowest-latency eligible endpoint for the selected model.
-The initial configuration sets DeepSeek's optional reasoning effort to low,
-limits Qwen reasoning to 256 tokens, and disables Mistral's optional extended
-reasoning. All retain the same 1,200-token total output ceiling. These settings
+Qwen reasoning is limited to 256 tokens. The selected DeepSeek and Mistral
+models default to ordinary responses without extended reasoning. All retain
+the same 1,200-token total output ceiling. These settings
 avoid provider defaults consuming the turn deadline before returning a move;
 they do not change model identity or substitute another decision engine.
 
@@ -82,6 +82,9 @@ creating ranked games using the container's `dist/ops/ai-check.js` entry point.
 These are real, paid requests, charged against the same shared budget ledger.
 The diagnostic prints only model IDs, status, latency and usage cost; it does
 not display credentials or private hands. Run it manually, not as a healthcheck.
+Optional model IDs after the command restrict the check to those configured
+roster entries. Retired identities and their billing/history records remain in
+the database but are excluded from the current selectable roster.
 
 ## Budget and failure behaviour
 
