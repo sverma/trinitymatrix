@@ -210,6 +210,13 @@ test("live broadcasts enforce a real two-minute release for hands and video, pre
 
     // Opening a spectator tab leaves the original account's game connection usable.
     const active = await host.page.getByRole("button", { name: /Closed deck/ }).isEnabled() ? host : rival;
+    for (let index = 0; index < 3; index++) await active.page.locator(".playing-card").nth(index).click();
+    await active.page.getByRole("button", { name: "Group selected", exact: true }).click();
+    await expect(active.page.locator(".hand-group")).toHaveCount(2);
+    const recordedGroups = await active.page.evaluate(({ gameId, playerId }) => {
+      const value = sessionStorage.getItem(`trinitymatrix:hand-layout:${gameId}:${playerId}`);
+      return (JSON.parse(value!) as { groups: string[][] }).groups;
+    }, { gameId: initial.broadcast.gameId, playerId: active.playerId });
     await active.page.getByRole("button", { name: /Closed deck/ }).click();
     await expect(active.page.getByRole("heading", { name: "Your hand (14)" })).toBeVisible();
     await active.page.locator(".playing-card").last().click();
@@ -263,10 +270,15 @@ test("live broadcasts enforce a real two-minute release for hands and video, pre
     expect(released.frame!.hands).toHaveLength(2);
     expect(released.frame!.hands.every(({ cards }) => cards.length === 13)).toBe(true);
     expect(released.frame!.winner?.id).toBe(rival.playerId);
+    const releasedLayout = released.frame!.hands.find(hand => hand.playerId === active.playerId)?.layout;
+    expect(releasedLayout).toEqual({ source: "recorded", groups: recordedGroups });
     const safe = JSON.stringify(released.frame);
     for (const privateField of ["seenCommands", "discardHistory", "agentMemory", "password", "email", '"stock":']) expect(safe).not.toContain(privateField);
     await expect(spectatorWatch.locator(".watch-player-hand")).toHaveCount(2);
     await expect(spectatorWatch.locator(".watch-cards img")).toHaveCount(26);
+    const recordedHand = spectatorWatch.getByRole("region", { name: `${active.name}'s revealed hand` });
+    await expect(recordedHand.locator(".watch-layout-source")).toContainText("Recorded grouping");
+    await expect(recordedHand.locator(".watch-hand-group")).toHaveCount(2);
     await expect(spectatorWatch.locator(".watch-winner")).toContainText(`${rival.name} won.`);
     await expect(spectatorWatch.getByText(participantMessage, { exact: true })).toBeVisible();
     await expect(sixWatch.locator(".watch-player-hand")).toHaveCount(6);

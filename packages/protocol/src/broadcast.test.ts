@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { broadcastCommentBodySchema, broadcastCommentSchema, broadcastEventSchema, broadcastFrameSchema, parseClientMessage, parseServerMessage } from "./index";
+import { broadcastCommentBodySchema, broadcastCommentSchema, broadcastEventSchema, broadcastFrameSchema, broadcastHandSchema, parseClientMessage, parseServerMessage } from "./index";
 
 const playerId = "00000000-0000-4000-8000-000000000001";
 const otherId = "00000000-0000-4000-8000-000000000002";
@@ -44,5 +44,15 @@ describe("broadcast protocol compatibility and privacy", () => {
       expect(broadcastEventSchema.parse({ type: "closed", code, reason: "Stream closed" })).toMatchObject({ code });
     }
     expect(() => broadcastEventSchema.parse({ type: "closed", code: "unknown", reason: "Stream closed" })).toThrow();
+  });
+  it("keeps legacy hands compatible and accepts recorded groupings only when they partition the released cards", () => {
+    const cards = ["a", "b", "c"].map((id) => ({ id, suit: "clubs", rank: 7, deck: 1, printedJoker: false }));
+    const hand = { playerId, cards };
+    expect(broadcastHandSchema.parse(hand)).toEqual(hand);
+    expect(broadcastHandSchema.parse({ ...hand, layout: { source: "recorded", groups: [["c"], ["a", "b"]] } })).toMatchObject({ layout: { source: "recorded" } });
+    for (const groups of [[["a"], ["b"]], [["a", "b", "foreign"]], [["a", "b"], ["a", "c"]]]) {
+      expect(() => broadcastHandSchema.parse({ ...hand, layout: { source: "recorded", groups } })).toThrow();
+    }
+    expect(() => broadcastHandSchema.parse({ ...hand, layout: { source: "suggested", groups: [["a", "b", "c"]] } })).toThrow();
   });
 });

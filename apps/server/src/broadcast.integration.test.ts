@@ -31,13 +31,14 @@ describe.skipIf(!databaseUrl)("delayed broadcasts in isolated PostgreSQL", () =>
     if (kind === "ai") await pool.query("INSERT INTO ai_agents(user_id,model_id,model_name) VALUES($1,$2,'Fixture model')", [id, `fixture/${id}`]);
     return id;
   }
-  async function event(snapshot: RankingGameSnapshot, sequence: number, occurredAt: Date, recordedAt = occurredAt) {
+  async function event(snapshot: RankingGameSnapshot, sequence: number, occurredAt: Date, recordedAt = occurredAt,
+    input: { actorUserId?: string; command?: Record<string, unknown>; eventType?: string } = {}) {
     await pool.query(
-      `INSERT INTO game_events(event_id,match_id,sequence,event_type,payload,occurred_at,recorded_at)
-       VALUES($1,$2,$3,$4,$5,$6,$7)`,
-      [randomUUID(), snapshot.id, sequence, sequence === 1 ? "game.started" : "game.discard", {
-        state: { ...snapshot, revision: sequence }, email: "PRIVATE_EMAIL", memory: "PRIVATE_AGENT_NOTES", command: { token: "PRIVATE_COMMAND_TOKEN" }
-      }, occurredAt, recordedAt]
+      `INSERT INTO game_events(event_id,match_id,sequence,event_type,payload,occurred_at,recorded_at,actor_user_id)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [randomUUID(), snapshot.id, sequence, input.eventType ?? (sequence === 1 ? "game.started" : "game.discard"), {
+        state: { ...snapshot, revision: sequence }, email: "PRIVATE_EMAIL", memory: "PRIVATE_AGENT_NOTES", command: input.command ?? { token: "PRIVATE_COMMAND_TOKEN" }
+      }, occurredAt, recordedAt, input.actorUserId ?? null]
     );
   }
   async function game(options: { composition?: "human" | "ai" | "mixed"; private?: boolean; archived?: boolean; enabled?: boolean } = {}) {
@@ -81,6 +82,64 @@ describe.skipIf(!databaseUrl)("delayed broadcasts in isolated PostgreSQL", () =>
     const firstPage = await repository.timeline(name, undefined, 1, new Date(+anchor + 140_000));
     expect(firstPage.nextCursor).toBe("3");
     expect((await repository.timeline(name, 3, 1, new Date(+anchor + 140_000))).frames[0]?.sequence).toBe(2);
+  });
+
+  it("loads each actor's last recorded layout at the selected sequence with both release timestamps gated", async () => {
+    const { snapshot, name, ids } = await game();
+    const a = snapshot.hands.find(({ playerId }) => playerId === ids[0])!.cards.map(({ id }) => id);
+    const b = snapshot.hands.find(({ playerId }) => playerId === ids[1])!.cards.map(({ id }) => id);
+    const firstA = [a.slice(0, 3), a.slice(3)]; const firstB = [[...b].reverse()];
+    const nextA = [a.slice(0, 6), a.slice(6)]; const lastA = [[...a].reverse()];
+    const anchor = new Date(); const old = new Date(+anchor - 300_000);
+    await event(snapshot, 2, old, old, { actorUserId: ids[0]!, command: { type: "game.discard", layout: firstA, playerId: ids[1], secret: "PRIVATE_COMMAND_SECRET" } });
+    await event(snapshot, 3, old, old, { actorUserId: ids[1]!, eventType: "game.draw", command: { type: "game.draw", layout: firstB } });
+    await event(snapshot, 4, old, anchor, { actorUserId: ids[0]!, command: { type: "game.discard", layout: nextA } });
+    await event(snapshot, 5, new Date(+anchor + 20_000), old, { actorUserId: ids[0]!, command: { type: "game.discard", layout: lastA } });
+    const pending = (await repository.detail(name, new Date(+anchor + 119_999)))!.frame!;
+    expect(pending.sequence).toBe(3);
+    expect(pending.hands[0]!.layout).toEqual({ source: "recorded", groups: firstA });
+    expect(pending.hands[1]!.layout).toEqual({ source: "recorded", groups: firstB });
+    const released = (await repository.detail(name, new Date(+anchor + 120_000)))!.frame!;
+    expect(released.sequence).toBe(4); expect(released.hands[0]!.layout!.groups).toEqual(nextA);
+    expect((await repository.detail(name, new Date(+anchor + 139_999)))!.frame!.hands[0]!.layout!.groups).toEqual(nextA);
+    expect((await repository.detail(name, new Date(+anchor + 140_000)))!.frame!.hands[0]!.layout!.groups).toEqual(lastA);
+    const historical = (await repository.frame(name, 3, new Date(+anchor + 180_000)))!;
+    expect(historical.hands[0]!.layout!.groups).toEqual(firstA);
+    expect(historical.hands[1]!.layout!.groups).toEqual(firstB);
+    expect((await repository.frame(name, 1, new Date(+anchor + 180_000)))!.hands.every(({ layout }) => !layout)).toBe(true);
+    expect(JSON.stringify(historical)).not.toMatch(/PRIVATE_|"command"|"payload"|"memory"|"email"/);
+
+    const submitted = [b.slice(0, 3), b.slice(3)];
+    const showdown = { ...snapshot, phase: "showdown" as const, showdown: { declarerId: ids[0]!, pendingPlayerIds: [], submissions: [{ playerId: ids[1]!, groups: submitted }], endsAt: +anchor + 45_000, score: 21 } };
+    await event(showdown, 6, new Date(+anchor + 30_000), old, { actorUserId: ids[1]!, eventType: "game.submit-hand", command: { type: "game.submit-hand", groups: submitted } });
+    expect((await repository.frame(name, 6, new Date(+anchor + 150_000)))!.hands[1]!.layout!.groups).toEqual(submitted);
+    await event(snapshot, 7, new Date(+anchor + 40_000), old, { actorUserId: ids[1]!, command: { type: "game.discard", layout: [[b[0]], [b[0]]] } });
+    const malformed = (await repository.frame(name, 7, new Date(+anchor + 160_000)))!;
+    expect(malformed.hands[1]!.layout).toBeUndefined();
+    expect(malformed.hands[0]!.layout!.groups).toEqual(lastA);
+    await event(snapshot, 8, new Date(+anchor + 50_000), old, { actorUserId: ids[0]!, command: { type: "game.discard", layout: [["PRIVATE_OUT_OF_HAND", b[0]]] } });
+    const stale = (await repository.frame(name, 8, new Date(+anchor + 170_000)))!;
+    expect(stale.hands[0]!.layout).toBeUndefined();
+    expect(JSON.stringify(stale)).not.toContain("PRIVATE_OUT_OF_HAND");
+    expect((await repository.frame(name, 6, new Date(+anchor + 180_000)))!.hands[1]!.layout!.groups).toEqual(submitted);
+  });
+
+  it("skips AI moves without layouts while preserving declarer and final-submission groupings", async () => {
+    const { snapshot, name, ids } = await game({ composition: "ai" }); const old = new Date(Date.now() - 300_000);
+    const a = snapshot.hands.find(({ playerId }) => playerId === ids[0])!.cards.map(({ id }) => id);
+    const b = snapshot.hands.find(({ playerId }) => playerId === ids[1])!.cards.map(({ id }) => id);
+    await event(snapshot, 2, old, old, { actorUserId: ids[0]!, eventType: "game.draw", command: { type: "game.draw", source: "stock" } });
+    await event(snapshot, 3, old, old, { actorUserId: ids[0]!, command: { type: "game.discard", cardId: "discarded" } });
+    expect((await repository.detail(name))!.frame!.hands.every(({ layout }) => !layout)).toBe(true);
+    const melds = [a.slice(0, 3), a.slice(3)]; const groups = [b.slice(0, 4), b.slice(4)];
+    const declared = { ...snapshot, phase: "showdown" as const, showdown: { declarerId: ids[0]!, pendingPlayerIds: [ids[1]!], submissions: [], endsAt: Date.now() + 45_000, score: 21 } };
+    await event(declared, 4, old, old, { actorUserId: ids[0]!, eventType: "game.declare", command: { type: "game.declare", melds } });
+    const finished = { ...declared, phase: "finished" as const, showdown: { ...declared.showdown, pendingPlayerIds: [], submissions: [{ playerId: ids[1]!, groups }] } };
+    await event(finished, 5, old, old, { actorUserId: ids[1]!, eventType: "game.submit-hand", command: { type: "game.submit-hand", groups } });
+    const current = (await repository.detail(name))!.frame!;
+    expect(current.hands[0]!.layout).toEqual({ source: "recorded", groups: melds });
+    expect(current.hands[1]!.layout).toEqual({ source: "recorded", groups });
+    expect((await repository.frame(name, 3))!.hands.every(({ layout }) => !layout)).toBe(true);
   });
 
   it("delays results from server completion receipt even when ended_at was backdated", async () => {

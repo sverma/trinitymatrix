@@ -6,6 +6,15 @@ move history, pause/seek/live controls, audience count, chat and optional video.
 Watching requires an authenticated account. Spectators never open a gameplay
 WebSocket, so a watch tab cannot replace that account's game connection.
 
+Released hands show separate card groups, each group's card count and valid
+meld total, plus valid/invalid group counts, unmatched cards and natural 21
+progress for each player. Recorded groups use the player's latest archived
+draw, discard, drop, declaration or final-hand submission at that playhead.
+When no recorded grouping exists, the viewer shows a clearly labelled
+suggested grouping of the already released cards. Suggestions never choose
+an AI opponent's moves. Grouping and status follow the same two-minute gate
+as the cards, including when seeking through older moves.
+
 ## Consent and fair play
 
 Every human must explicitly choose **Broadcast this match** before joining a
