@@ -11,6 +11,7 @@ import {
 import { profileBadges, type Card, type GamePublicState } from "@trinitymatrix/protocol";
 import { cardLabel, validateDeclaration, validateMeld } from "@trinitymatrix/game-domain";
 import type { AiPlayerForfeit } from "../api";
+import { BroadcastControls } from "./LiveBroadcast";
 import {
   getTurnSoundsEnabled,
   playTurnEnded,
@@ -553,6 +554,8 @@ export function GameTable({
         {game.phase === "playing" && isPlaying && !winner && <button type="button" className="drop-game-button" onClick={() => setConfirmDrop(true)}>Drop game</button>}
       </div>
     </header>
+
+    {game.broadcast && <BroadcastControls gameName={game.broadcast.gameName} />}
 
     {aiForfeits.length > 0 && <aside className="ai-forfeit-notice" role="status" aria-label="AI player availability">
       {aiForfeits.map((entry) => <p key={entry.playerId}><strong>{entry.playerName} forfeited.</strong> {entry.reason}</p>)}

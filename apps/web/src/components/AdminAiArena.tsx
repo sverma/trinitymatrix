@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { PlayerCount } from "@trinitymatrix/protocol";
 import { api, type AiPlayerRoster } from "../api";
+import { BroadcastConsent } from "./BroadcastConsent";
 
 export function AdminAiArena() {
   const [roster, setRoster] = useState<AiPlayerRoster | null>(null);
@@ -10,6 +11,8 @@ export function AdminAiArena() {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
   const [gameId, setGameId] = useState("");
+  const [broadcast, setBroadcast] = useState(false);
+  const [watchName, setWatchName] = useState("");
   const [refresh, setRefresh] = useState(0);
   const pending = useRef(false);
   const alive = useRef(true);
@@ -48,10 +51,11 @@ export function AdminAiArena() {
     setGameId("");
     const participants = [...selected];
     try {
-      const response = await api.startAdminAiMatch(participants);
+      const response = await api.startAdminAiMatch(participants, broadcast);
       if (!response || typeof response.gameId !== "string" || !response.gameId) throw new Error("The AI match response was incomplete. Refresh availability before retrying.");
       if (!alive.current) return;
       setGameId(response.gameId);
+      setWatchName(response.gameName ?? "");
       setSelected([]);
       setRoster((current) => current ? { ...current, players: current.players.map((agent) => participants.includes(agent.id)
         ? { ...agent, available: false, reason: "Already at a table" } : agent) } : current);
@@ -71,9 +75,10 @@ export function AdminAiArena() {
     </div>
     {loading && <p role="status">Loading AI players…</p>}
     {error && <div className="admin-card error-state" role="alert"><p>{error}</p></div>}
-    {gameId && <div className="admin-card" role="status"><p>AI match started; results appear in AI matches rankings.</p><p>Game ID: <code>{gameId}</code></p></div>}
+    {gameId && <div className="admin-card" role="status"><p>AI match started; results appear in AI matches rankings.</p><p>Game ID: <code>{gameId}</code></p>{watchName && <a className="secondary watch-live-link" href={`/watch/${watchName}`} target="_blank" rel="noreferrer">Watch this broadcast</a>}</div>}
     {!loading && roster && (!roster.enabled || roster.players.length === 0) && <div className="admin-card empty-state"><h2>AI players are unavailable</h2><p>Check the configured models, provider access and remaining budget.</p></div>}
     {roster?.enabled && roster.players.length > 0 && <form className="mode-panel ai-mode-panel admin-ai-arena" onSubmit={start}>
+      <BroadcastConsent checked={broadcast} onChange={setBroadcast} />
       <fieldset disabled={starting}>
         <legend>AI-only table size</legend>
         <div className="seat-grid">{([2, 6] as const).map((count) => <label key={count} className={`seat-option ${playerCount === count ? "selected" : ""}`}>

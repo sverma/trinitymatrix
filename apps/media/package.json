@@ -1,0 +1,15 @@
+{
+  "name": "@trinitymatrix/media",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "build": "node --check src/index.mjs && node --check src/worker.mjs",
+    "typecheck": "node --check src/index.mjs && node --check src/worker.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:ffmpeg": "TRINITY_MEDIA_REAL_FFMPEG=1 node --test test/ffmpeg.test.mjs"
+  }
+}

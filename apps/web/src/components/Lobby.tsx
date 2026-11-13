@@ -5,6 +5,7 @@ import { MatchHistoryView, RankingsView, type PlayerSection } from "./PlayerView
 import { ProfileDialog } from "./ProfileDialog";
 import { PolicyFooter } from "./PolicyPages";
 import { AiPlayers } from "./AiPlayers";
+import { BroadcastConsent } from "./BroadcastConsent";
 
 type PlayMode = "general" | "private" | "ai";
 
@@ -44,7 +45,7 @@ export function Lobby({
   connected = true
 }: {
   player: AuthPlayer;
-  onJoin: (count: PlayerCount) => void;
+  onJoin: (count: PlayerCount, broadcast?: boolean) => void;
   onLogout: () => void;
   onUpdateProfile: (profile: ProfileUpdate) => Promise<void>;
   onOpenPrivateRoom?: (room: PrivateRoom) => void;
@@ -60,6 +61,7 @@ export function Lobby({
 }) {
   const [playMode, setPlayMode] = useState<PlayMode>("general");
   const [playerCount, setPlayerCount] = useState<PlayerCount>(2);
+  const [broadcast, setBroadcast] = useState(false);
   const [privatePlayerCount, setPrivatePlayerCount] = useState<PlayerCount>(2);
   const [inviteEmails, setInviteEmails] = useState([""]);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -182,6 +184,7 @@ export function Lobby({
     <header className="app-header">
       <a className="wordmark" href="/" aria-label="TrinityMatrix home"><span>TM</span> TrinityMatrix</a>
       <nav className="player-nav" aria-label="Player navigation">
+        <a className="watch-live-link" href="/live">Watch live</a>
         {(["play", "rankings", "history"] as const).map((item) => <button type="button" key={item} className={section === item ? "active" : ""} aria-current={section === item ? "page" : undefined} onClick={() => onSectionChange(item)}>
           {item === "play" ? "Play" : item === "rankings" ? "Rankings" : "History"}
         </button>)}
@@ -230,7 +233,7 @@ export function Lobby({
       {privateError && <p className="private-lobby-message error" role="alert">{privateError}</p>}
       {privateNotice && <p className="private-lobby-message" role="status">{privateNotice}</p>}
 
-      {playMode === "ai" ? <AiPlayers connected={connected} privateTableOpen={hasOpenPrivateCommitment} /> : playMode === "general" ? <form className="mode-panel" onSubmit={(event) => { event.preventDefault(); onJoin(playerCount); }}>
+      {playMode === "ai" ? <AiPlayers connected={connected} privateTableOpen={hasOpenPrivateCommitment} /> : playMode === "general" ? <form className="mode-panel" onSubmit={(event) => { event.preventDefault(); broadcast ? onJoin(playerCount, true) : onJoin(playerCount); }}>
         <div className="mode-summary"><span>Mode</span><strong>Ranking</strong></div>
         <div className="mode-summary"><span>Variant</span><strong>Points</strong></div>
         <fieldset><legend>Number of players</legend><div className="seat-grid">
@@ -239,6 +242,7 @@ export function Lobby({
             <span className="seat-number">{count}</span><span>{count === 2 ? "Head-to-head" : "Full table"}</span><small>{count === 2 ? "Focused and quick" : "Social and strategic"}</small>
           </label>)}
         </div></fieldset>
+        <BroadcastConsent checked={broadcast} onChange={setBroadcast} />
         <button className="primary play-button" disabled={hasOpenPrivateCommitment}>{hasOpenPrivateCommitment ? "Private table already open" : `Find a ${playerCount}-player match`}</button>
         <p className="safety-note">{hasOpenPrivateCommitment ? "Open or cancel your existing private table before joining ranked matchmaking." : "General · Ranked · Free play only · No bots · No payments"}</p>
       </form> : <form className="mode-panel private-mode-panel" noValidate onSubmit={createPrivateRoom}>

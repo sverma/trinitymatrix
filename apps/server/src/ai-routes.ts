@@ -10,11 +10,13 @@ export type AiPlayerRouteOptions = Readonly<{
   adminEmails: ReadonlySet<string>;
   isReady: () => boolean;
   dailyBudgetUsd: number;
+  broadcastGameName?: (gameId: string) => string | null;
 }>;
 
 function selectionSchema(sizes: readonly number[]) {
   return z.object({
-    agentIds: z.array(z.string().uuid().transform((value) => value.toLowerCase())).min(1).max(6)
+    agentIds: z.array(z.string().uuid().transform((value) => value.toLowerCase())).min(1).max(6),
+    broadcast: z.boolean().optional()
   }).strict().superRefine(({ agentIds }, context) => {
     if (!sizes.includes(agentIds.length) || new Set(agentIds).size !== agentIds.length) {
       context.addIssue({ code: "custom", path: ["agentIds"], message: "Choose distinct AI players to fill the table." });
@@ -82,8 +84,11 @@ export function registerAiPlayerRoutes(app: FastifyInstance, options: AiPlayerRo
     if (!ready(reply)) return;
     if (!options.players) return reply.code(503).send({ error: "AI players are not configured for this deployment." });
     try {
-      const gameId = await options.players.startMatch(admin ? null : session.playerId, body.data.agentIds);
-      return reply.code(201).send({ gameId });
+      const gameId = body.data.broadcast
+        ? await options.players.startMatch(admin ? null : session.playerId, body.data.agentIds, { broadcast: true })
+        : await options.players.startMatch(admin ? null : session.playerId, body.data.agentIds);
+      const gameName = body.data.broadcast ? options.broadcastGameName?.(gameId) : null;
+      return reply.code(201).send({ gameId, ...(gameName ? { gameName } : {}) });
     } catch {
       // Raw errors can contain provider payloads, credentials or database details.
       request.log.warn({ code: "AI_MATCH_UNAVAILABLE" }, "AI match could not be started");

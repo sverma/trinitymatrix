@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { PlayerCount } from "@trinitymatrix/protocol";
 import { api, type AiPlayerRoster } from "../api";
+import { BroadcastConsent } from "./BroadcastConsent";
 
 export function AiPlayers({ connected, privateTableOpen }: { connected: boolean; privateTableOpen: boolean }) {
   const [roster, setRoster] = useState<AiPlayerRoster | null>(null);
   const [playerCount, setPlayerCount] = useState<PlayerCount>(2);
   const [selected, setSelected] = useState<string[]>([]);
+  const [broadcast, setBroadcast] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [starting, setStarting] = useState(false);
@@ -51,7 +53,7 @@ export function AiPlayers({ connected, privateTableOpen }: { connected: boolean;
     setStarting(true);
     setError("");
     try {
-      const result = await api.startAiMatch(selected);
+      const result = await api.startAiMatch(selected, broadcast);
       if (!result || typeof result.gameId !== "string" || !result.gameId) {
         throw new Error("The AI table response was incomplete. Reconnect before trying again.");
       }
@@ -106,6 +108,7 @@ export function AiPlayers({ connected, privateTableOpen }: { connected: boolean;
           </div>
           {availableCount < required && <p className="ai-roster-note" role="status">This table needs {required} available AI {required === 1 ? "player" : "players"}; {availableCount} currently available.</p>}
         </fieldset>
+        <BroadcastConsent checked={broadcast} onChange={setBroadcast} />
         {created && <p className="ai-full-width" role="status">AI table created. Opening your game…</p>}
         <button className="primary play-button" disabled={!canStart}>{starting ? "Starting AI table…" : created ? "Opening AI table…" : `Play against ${required === 1 ? "selected AI" : "selected AIs"}`}</button>
         <p className="safety-note">{privateTableOpen ? "Open or cancel your existing private table before starting an AI match." : !connected ? "Waiting for your game connection…" : "Mixed matches · Ranked · AI players are labelled at the table"}</p>

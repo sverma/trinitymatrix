@@ -56,6 +56,12 @@ export interface GameArchive {
 
 const turnDurationMs = 45_000;
 const savedStateKey = "matchmaker:active-games";
+// Separate metadata keeps the gameplay snapshot readable by earlier releases.
+const broadcastConsentKey = "matchmaker:broadcast-consent";
+const broadcastConsentSchema = z.object({
+  queuedPlayerIds: z.array(z.string()).default([]),
+  gameIds: z.array(z.string()).default([])
+}).strict();
 const savedStateSchema = z.object({
   version: z.union([z.literal(1), z.literal(2)]),
   games: z.array(rankingGameSnapshotSchema),
@@ -79,6 +85,9 @@ export class Matchmaker {
   private readonly privateEntryReservations = new Map<string, string | null>();
   private readonly privateStartAttempts = new Map<string, Promise<void>>();
   private readonly gameTimers = new Map<string, NodeJS.Timeout>();
+  private readonly broadcastQueuePlayers = new Set<string>();
+  private readonly broadcastGames = new Set<string>();
+  private readonly broadcastStarts = new Map<string, Promise<void>>();
   private persistChain: Promise<void> = Promise.resolve();
   private readonly archiveChains = new Map<string, Promise<void>>();
   private shuttingDown = false;
@@ -86,7 +95,8 @@ export class Matchmaker {
   constructor(
     private readonly store: StateStore,
     private readonly reportPersistenceError: (error: unknown) => void = () => undefined,
-    private readonly archive?: GameArchive
+    private readonly archive?: GameArchive,
+    private readonly onBroadcastStarted?: (snapshot: RankingGameSnapshot) => Promise<void>
   ) {}
 
   private archiveWork(gameId: string, work: (archive: GameArchive) => Promise<void>): Promise<void> {
@@ -117,6 +127,14 @@ export class Matchmaker {
     const stored = await this.store.get<unknown>(savedStateKey);
     if (!stored) return;
     const snapshot = savedStateSchema.parse(stored);
+    const consent = broadcastConsentSchema.safeParse(await this.store.get<unknown>(broadcastConsentKey));
+    const queuedIds = new Set([...snapshot.queues.twoPlayer, ...snapshot.queues.sixPlayer]);
+    if (consent.success) {
+      for (const id of consent.data.queuedPlayerIds) if (queuedIds.has(id)) this.broadcastQueuePlayers.add(id);
+      for (const id of consent.data.gameIds) {
+        if (snapshot.games.some((game) => game.id === id) && snapshot.gameTypes?.[id] !== "private") this.broadcastGames.add(id);
+      }
+    }
     this.queues.set(2, [...snapshot.queues.twoPlayer]);
     this.queues.set(6, [...snapshot.queues.sixPlayer]);
     for (const [gameId, matchType] of Object.entries(snapshot.gameTypes ?? {})) this.gameTypes.set(gameId, matchType);
@@ -131,6 +149,7 @@ export class Matchmaker {
         if (game.isAttached(player.id)) this.playerGames.set(player.id, game.id);
       }
       this.armTimer(game);
+      if (this.broadcastGames.has(game.id)) this.startBroadcast(game.snapshot());
     }
   }
 
@@ -393,7 +412,7 @@ export class Matchmaker {
       return;
     }
     if (message.type === "queue.join") {
-      this.joinQueue(playerId, message.playerCount);
+      this.joinQueue(playerId, message.playerCount, message.broadcast ?? false);
       return;
     }
     if (message.type === "queue.leave") {
@@ -413,15 +432,20 @@ export class Matchmaker {
     return this.connections.get(playerId)?.socket.readyState === WebSocketRuntime.OPEN && this.canEnterPrivateRoom(playerId);
   }
 
+  broadcastGameName(gameId: string): string | null {
+    return this.broadcastGames.has(gameId) ? this.games.get(gameId)?.publicName ?? null : null;
+  }
+
   /** Selected AI tables never enroll opponents in the public human queue. */
-  startSelectedMatch(playerIds: readonly string[]): string {
+  startSelectedMatch(playerIds: readonly string[], options: { broadcast?: boolean } = {}): string {
     if ((playerIds.length !== 2 && playerIds.length !== 6) || new Set(playerIds).size !== playerIds.length) {
       throw new Error("Select distinct players for a two- or six-player table.");
     }
     if (playerIds.some((id) => !this.isPlayerAvailable(id))) {
       throw new Error("A selected player is busy, queued, or disconnected. Refresh and retry.");
     }
-    return this.startMatch(playerIds.map((id) => this.connections.get(id)!)).id;
+    if (options.broadcast && (!this.onBroadcastStarted || !this.archive)) throw new Error("Broadcasting is unavailable.");
+    return this.startMatch(playerIds.map((id) => this.connections.get(id)!), options.broadcast ?? false).id;
   }
 
   executeAgentCommand(playerId: string, command: GameCommand, notice?: AiForfeitNotice): GameResult | null {
@@ -430,35 +454,43 @@ export class Matchmaker {
     return this.applyGameCommand(playerId, command, notice ? aiForfeitNoticeSchema.parse(notice) : undefined);
   }
 
-  private startMatch(players: readonly Connection[]): RankingGame {
+  private startMatch(players: readonly Connection[], broadcast = false): RankingGame {
     const game = new RankingGame(players.map(({ playerId: id, displayName, badgeId, actorKind, aiModelId }) => ({
       id, displayName, badgeId: badgeId ?? "rookie",
       ...(actorKind ? { actorKind } : {}), ...(aiModelId ? { aiModelId } : {})
     })));
     this.games.set(game.id, game);
     this.gameTypes.set(game.id, "general");
+    if (broadcast) this.broadcastGames.add(game.id);
     for (const player of players) this.playerGames.set(player.playerId, game.id);
     const started = game.snapshot();
     void this.archiveWork(game.id, (archive) => archive.recordEvent({
       game: started, matchType: "general", privateRoomCode: null, eventType: "game.started",
       actorPlayerId: null, commandId: null, command: null, occurredAt: new Date()
-    }));
+    })).then(() => { if (broadcast) this.startBroadcast(started); });
     for (const player of players) this.sendStarted(player.playerId, game);
     this.armTimer(game);
     this.persist();
     return game;
   }
 
-  private joinQueue(playerId: string, playerCount: PlayerCount): void {
+  private joinQueue(playerId: string, playerCount: PlayerCount, broadcast = false): void {
+    if (broadcast && (!this.onBroadcastStarted || !this.archive)) {
+      this.send(playerId, { type: "error", code: "BROADCAST_UNAVAILABLE", message: "Live broadcasting is temporarily unavailable. You can join a regular table." });
+      return;
+    }
     if (this.playerGames.has(playerId)) {
       this.send(playerId, { type: "error", code: "ALREADY_IN_GAME", message: "You already have an active game." });
       return;
     }
-    if (this.privateEntryReservations.has(playerId) || !this.canEnterPrivateRoom(playerId)) {
+    const privateCommitment = [...this.privateRooms.values()].some((room) => room.status === "waiting"
+      && (room.creator.playerId === playerId || room.invites.some((invite) => invite.playerId === playerId)));
+    if (this.privateEntryReservations.has(playerId) || privateCommitment) {
       this.send(playerId, { type: "error", code: "PRIVATE_ROOM_PENDING", message: "Finish or cancel your private room first." });
       return;
     }
     this.leaveQueue(playerId, false);
+    if (broadcast) this.broadcastQueuePlayers.add(playerId);
     const queue = this.queues.get(playerCount)!;
     if (!queue.includes(playerId)) queue.push(playerId);
     this.broadcastQueue(playerCount);
@@ -467,6 +499,7 @@ export class Matchmaker {
   }
 
   private leaveQueue(playerId: string, notify = true): void {
+    this.broadcastQueuePlayers.delete(playerId);
     for (const [count, queue] of this.queues) {
       const next = queue.filter((queuedId) => queuedId !== playerId);
       if (next.length !== queue.length) {
@@ -480,13 +513,22 @@ export class Matchmaker {
   private createMatches(playerCount: PlayerCount): void {
     const queue = this.queues.get(playerCount)!;
     while (queue.length >= playerCount) {
-      const candidateIds = queue.slice(0, playerCount);
+      const pools = [false, true].map((broadcast) => ({ broadcast,
+        ids: queue.filter((id) => this.broadcastQueuePlayers.has(id) === broadcast).slice(0, playerCount)
+      })).filter(({ ids }) => ids.length === playerCount)
+        .sort((left, right) => queue.indexOf(left.ids[0]!) - queue.indexOf(right.ids[0]!));
+      const pool = pools[0];
+      if (!pool) break;
+      const candidateIds = pool.ids;
       const players = candidateIds
         .map((id) => this.connections.get(id))
         .filter((connection): connection is Connection => Boolean(connection));
       if (players.length !== playerCount) break;
-      queue.splice(0, playerCount);
-      this.startMatch(players);
+      for (const id of candidateIds) {
+        queue.splice(queue.indexOf(id), 1);
+        this.broadcastQueuePlayers.delete(id);
+      }
+      this.startMatch(players, pool.broadcast);
     }
     this.broadcastQueue(playerCount);
   }
@@ -561,14 +603,34 @@ export class Matchmaker {
       type: "game.started",
       ...game.publicState(),
       matchType: this.gameTypes.get(game.id) ?? "general",
+      ...(this.broadcastGames.has(game.id) ? { broadcast: { gameName: game.publicName, delayMs: 120_000 } } : {}),
       hand: game.handFor(playerId)
+    });
+  }
+
+  private startBroadcast(snapshot: RankingGameSnapshot): void {
+    if (!this.onBroadcastStarted || this.broadcastStarts.has(snapshot.id)) return;
+    const task = (async () => {
+      for (const delay of [0, 250, 1_000]) {
+        if (delay) await new Promise<void>((resolve) => setTimeout(resolve, delay));
+        try { await this.onBroadcastStarted!(snapshot); return; }
+        catch (error) { this.reportPersistenceError(error); }
+      }
+      // Broadcasting must never block gameplay archival or rating settlement.
+    })();
+    this.broadcastStarts.set(snapshot.id, task);
+    void task.finally(() => {
+      if (this.broadcastStarts.get(snapshot.id) === task) this.broadcastStarts.delete(snapshot.id);
     });
   }
 
   private broadcastQueue(playerCount: PlayerCount): void {
     const queue = this.queues.get(playerCount)!;
-    const status: ServerMessage = { type: "queue.status", playerCount, joined: queue.length, required: playerCount };
-    for (const playerId of queue) this.send(playerId, status);
+    for (const playerId of queue) {
+      const broadcast = this.broadcastQueuePlayers.has(playerId);
+      const joined = queue.filter((id) => this.broadcastQueuePlayers.has(id) === broadcast).length;
+      this.send(playerId, { type: "queue.status", playerCount, joined, required: playerCount, ...(broadcast ? { broadcast: true } : {}) });
+    }
   }
 
   private broadcastHands(game: RankingGame): void {
@@ -583,7 +645,8 @@ export class Matchmaker {
     this.broadcast(game, {
       type: "game.state",
       ...game.publicState(),
-      matchType: this.gameTypes.get(game.id) ?? "general"
+      matchType: this.gameTypes.get(game.id) ?? "general",
+      ...(this.broadcastGames.has(game.id) ? { broadcast: { gameName: game.publicName, delayMs: 120_000 } } : {})
     });
   }
 
@@ -678,6 +741,7 @@ export class Matchmaker {
   }
 
   private releaseGame(game: RankingGame): void {
+    this.broadcastGames.delete(game.id);
     this.games.delete(game.id);
     this.gameTypes.delete(game.id);
     this.privateRoomCodes.delete(game.id);
@@ -685,6 +749,7 @@ export class Matchmaker {
   }
 
   private persist(): void {
+    const consent = { queuedPlayerIds: [...this.broadcastQueuePlayers], gameIds: [...this.broadcastGames] };
     const snapshot = {
       version: 2 as const,
       games: [...this.games.values()]
@@ -700,7 +765,16 @@ export class Matchmaker {
     };
     this.persistChain = this.persistChain
       .catch(() => undefined)
-      .then(() => this.store.set(savedStateKey, snapshot))
+      .then(async () => {
+        if (this.store.setMany) {
+          await this.store.setMany([{ key: savedStateKey, value: snapshot }, { key: broadcastConsentKey, value: consent }]);
+        } else {
+          // A partial legacy-store write may lose consent, but must never restore stale opt-ins.
+          await this.store.delete(broadcastConsentKey);
+          await this.store.set(savedStateKey, snapshot);
+          await this.store.set(broadcastConsentKey, consent);
+        }
+      })
       .catch((error) => this.reportPersistenceError(error));
   }
 
@@ -708,6 +782,7 @@ export class Matchmaker {
     await Promise.all(this.privateStartAttempts.values());
     this.persist();
     await Promise.all([this.persistChain, ...this.archiveChains.values()]);
+    await Promise.all(this.broadcastStarts.values());
   }
 
   shutdown(): void {

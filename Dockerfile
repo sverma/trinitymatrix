@@ -9,6 +9,7 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY apps/web/package.json apps/web/package.json
 COPY apps/server/package.json apps/server/package.json
+COPY apps/media/package.json apps/media/package.json
 COPY packages/protocol/package.json packages/protocol/package.json
 COPY packages/game-domain/package.json packages/game-domain/package.json
 RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
@@ -27,6 +28,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
 COPY apps/server/package.json apps/server/package.json
+COPY apps/media/package.json apps/media/package.json
 COPY packages/protocol/package.json packages/protocol/package.json
 COPY packages/game-domain/package.json packages/game-domain/package.json
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --ignore-scripts

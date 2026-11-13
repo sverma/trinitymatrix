@@ -136,7 +136,7 @@ export class AiPlayers {
       }) };
   }
 
-  async startMatch(humanId: string | null, agentIds: readonly string[]): Promise<string> {
+  async startMatch(humanId: string | null, agentIds: readonly string[], options: { broadcast?: boolean } = {}): Promise<string> {
     const total = agentIds.length + (humanId ? 1 : 0);
     if ((total !== 2 && total !== 6) || new Set(agentIds).size !== agentIds.length || agentIds.includes(humanId ?? "")) {
       throw new Error("Choose distinct AI players to fill a two- or six-player table.");
@@ -147,7 +147,9 @@ export class AiPlayers {
     }
     // This final availability check and the table allocation are synchronous,
     // so simultaneous HTTP requests cannot assign an identity to two games.
-    return this.matchmaker.startSelectedMatch([...(humanId ? [humanId] : []), ...agentIds]);
+    const participants = [...(humanId ? [humanId] : []), ...agentIds];
+    return options.broadcast ? this.matchmaker.startSelectedMatch(participants, { broadcast: true })
+      : this.matchmaker.startSelectedMatch(participants);
   }
 
   private onMessage(agent: Agent, message: ServerMessage): void {

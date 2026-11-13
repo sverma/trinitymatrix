@@ -54,3 +54,26 @@ Before updating, take a PostgreSQL dump, preserve the previous image and
 release directory, build the new image, run migrations, and verify readiness.
 Rollback the `current` symlink and image only after checking schema compatibility.
 `docker compose stop` preserves data. Do not use `down --volumes` during updates.
+
+## Opt-in live broadcasts and video
+
+See [broadcast operations and privacy](../../docs/LIVE_BROADCASTS.md). Run the
+bootstrap script again to add a distinct private media secret to an existing
+installation. Set `BROADCASTS_ENABLED=true`, `BROADCAST_MEDIA_ENABLED=true`,
+`BROADCAST_MAX_VIDEO_STREAMS=1`, and `COMPOSE_PROFILES=broadcast-media` in the
+private runtime file. Build both `app` and `media`, run migrations, then start
+both services. The media worker has no published port. Its persistent volume
+is owned by UID/GID1000; do not mount that volume in Nginx.
+
+Install the updated Nginx configuration: only `/api/live/` permits 512 KiB
+binary uploads, and response buffering is disabled for spectator events.
+Keep all other request limits in place. `/live` is the signed-in directory;
+watch links use `/watch/<public-table-name>`. Screen and camera capture
+require HTTPS and an explicit browser permission gesture.
+
+Do not restart during an active game or video recording. Stop admissions,
+wait for active games to finish, take the database backup, and retain the
+previous release. Migration 0009 is additive; broadcast consent lives in a
+separate Redis key so the prior game-state reader can still recover games.
+The media worker can restart without releasing video early: unfinished
+recordings become interrupted and unreleased segments receive a fresh hold.

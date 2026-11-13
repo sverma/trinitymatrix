@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { PlayerCount, PrivateRoom } from "@trinitymatrix/protocol";
 
-export function Queue({ joined, required, playerCount, onLeave }: { joined: number; required: number; playerCount: PlayerCount; onLeave: () => void }) {
+export function Queue({ joined, required, playerCount, broadcast = false, onLeave }: { joined: number; required: number; playerCount: PlayerCount; broadcast?: boolean | undefined; onLeave: () => void }) {
   return <main id="main-content" className="queue-shell">
     <section className="queue-card" aria-labelledby="queue-title">
       <div className="queue-orbit" aria-hidden="true"><span>{joined}</span></div>
@@ -9,6 +9,7 @@ export function Queue({ joined, required, playerCount, onLeave }: { joined: numb
       <h1 id="queue-title">Finding your table</h1>
       <p aria-live="polite">{joined} of {required} players are ready.</p>
       <progress className="progress-track" aria-label="Players found" value={joined} max={required}>{joined} of {required}</progress>
+      {broadcast && <p className="broadcast-queue-note">Broadcast table · Everyone agrees to share all hands after a two-minute delay. Video is optional.</p>}
       <p className="muted">Keep this page open. Your cards will be dealt automatically when the table is full.</p>
       <button className="secondary" onClick={onLeave}>Leave queue</button>
     </section>

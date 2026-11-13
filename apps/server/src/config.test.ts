@@ -2,6 +2,20 @@ import { describe, expect, it } from "vitest";
 import { assertServerAuthConfig, authIpRateLimits, loadRuntimeConfig } from "./config";
 
 describe("runtime configuration", () => {
+  it("requires durable single-instance broadcasts and a distinct private video credential", () => {
+    expect(loadRuntimeConfig({}).broadcastsEnabled).toBe(false);
+    expect(loadRuntimeConfig({ BROADCAST_MEDIA_SECRET: "", BROADCAST_MEDIA_URL: "" }).broadcastMediaEnabled).toBe(false);
+    expect(() => loadRuntimeConfig({ BROADCASTS_ENABLED: "true" })).toThrow("PostgreSQL");
+    const database = { DATABASE_URL: "postgresql://db/trinity", BROADCASTS_ENABLED: "true" };
+    expect(() => loadRuntimeConfig({ ...database, GAMEPLAY_RUNTIME_MODE: "distributed", DURABLE_DATA_REQUIRED: "true" })).toThrow("single");
+    expect(() => loadRuntimeConfig({ ...database, BROADCAST_MEDIA_ENABLED: "true" })).toThrow("Broadcast video requires");
+    expect(() => loadRuntimeConfig({ ...database, BROADCAST_MEDIA_SECRET: "short" })).toThrow();
+    expect(() => loadRuntimeConfig({ ...database, BROADCAST_MEDIA_URL: "file:///private" })).toThrow();
+    expect(() => loadRuntimeConfig({ ...database, BROADCAST_MAX_VIDEO_STREAMS: "5" })).toThrow();
+    const config = loadRuntimeConfig({ ...database, BROADCAST_MEDIA_ENABLED: "true", BROADCAST_MEDIA_URL: "http://media:8082", BROADCAST_MEDIA_SECRET: "a-private-media-secret-with-at-least-32-characters" });
+    expect(config.broadcastMediaEnabled).toBe(true);
+    expect(config.broadcastMaxVideoStreams).toBe(1);
+  });
   it("keeps AI opt-in and caps its shared daily budget at the approved amount", () => {
     const defaults = loadRuntimeConfig({ OPENROUTER_API_KEY: "" });
     expect(defaults.aiPlayersEnabled).toBe(false);

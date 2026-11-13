@@ -67,6 +67,29 @@ describe("useGameSocket", () => {
     unmount();
   });
 
+  it("ignores in-flight queue updates after leaving and preserves broadcast consent on reconnect", () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { result, unmount } = renderHook(() => useGameSocket(true));
+    const first = FakeWebSocket.instances[0]!;
+    act(() => { first.open(); first.receive({ type: "session.ready", playerId: "player-1", displayName: "One" }); });
+    act(() => result.current.joinQueue(2, true));
+    expect(sentMessages(first)).toContainEqual({ type: "queue.join", playerCount: 2, broadcast: true });
+    act(() => first.close(1006));
+    act(() => vi.advanceTimersByTime(2_000));
+    const second = FakeWebSocket.instances[1]!;
+    act(() => { second.open(); second.receive({ type: "session.ready", playerId: "player-1", displayName: "One" }); });
+    expect(sentMessages(second)).toContainEqual({ type: "queue.join", playerCount: 2, broadcast: true });
+    act(() => result.current.leaveQueue());
+    act(() => second.receive({ type: "queue.status", joined: 1, required: 2, playerCount: 2, broadcast: true }));
+    expect(result.current.queue).toBeNull();
+    act(() => result.current.joinQueue(2));
+    act(() => second.receive({ type: "queue.status", joined: 1, required: 2, playerCount: 2 }));
+    expect(result.current.queue).toMatchObject({ joined: 1 });
+    expect(sentMessages(second).at(-1)).toEqual({ type: "queue.join", playerCount: 2 });
+    unmount();
+  });
+
   it("retains a technical AI forfeit reason when the game result immediately follows it", () => {
     const { result, unmount } = renderHook(() => useGameSocket(true));
     const socket = FakeWebSocket.instances[0]!;
