@@ -31,6 +31,23 @@ function mockArena(roster: AiPlayerRoster = { enabled: true, players: agents, da
 afterEach(() => vi.unstubAllGlobals());
 
 describe("AI opponent selection", () => {
+  it("explains validation-only v3 players and submits their distinct identity", async () => {
+    const user = userEvent.setup();
+    const agent = { ...agents[0]!, protocolVersion: "trinity-agent-protocol/3.0.0",
+      protocolId: `trinity-agent-protocol/3.0.0:${"b".repeat(64)}`, protocolHash: "b".repeat(64) };
+    const fetchMock = mockArena({ enabled: true, players: [agent], dailyBudgetUsd: 10 });
+    render(<AiPlayers connected privateTableOpen={false} />);
+    expect(await screen.findByText("AI protocol v3.0.0")).toBeInTheDocument();
+    expect(screen.getByText(/find their own melds/)).toHaveTextContent("Rules assistance only validates their proposed moves");
+    expect(screen.getByText(/find their own melds/)).toHaveTextContent("separate ratings; earlier results remain in history");
+    expect(screen.queryByText(agent.protocolId)).not.toBeInTheDocument();
+    expect(screen.queryByText(/declare at the first legal opportunity/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Select Agent 1" }));
+    await user.click(screen.getByRole("button", { name: "Play against selected AI" }));
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(String(post[1]?.body))).toEqual({ agentIds: [agent.id] });
+  });
+
   it("shows the protocol revision without exposing its full audit hash or changing selection identity", async () => {
     const user = userEvent.setup(); const agent = { ...agents[0]!, displayName: "Agent 1 · v2", protocolVersion: "trinity-agent-protocol/2.0.0",
       protocolId: `trinity-agent-protocol/2.0.0:${"a".repeat(64)}`, protocolHash: "a".repeat(64), rulesRevision: "trinity-rules/1.0.0" };

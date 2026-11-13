@@ -8,6 +8,9 @@ import { AI_GAME_PROTOCOL_IDENTITY_VERSION, AI_GAME_PROTOCOL_VERSION, AI_GAME_PR
   AI_GAME_RULES_REVISION, AI_LEGACY_V1_PROTOCOL_VERSION, type AiGameRulesFacts } from "./ai-game-protocol";
 import { AiRuleToolService } from "./ai-rule-tool-service";
 import { AI_RULES_TOOL_VERSION, unavailableAiRules, type AiRulesInput } from "./ai-rule-tools";
+import { AI_VALIDATION_IDENTITY_VERSION, AI_VALIDATION_PROTOCOL_VERSION, AI_VALIDATION_PROTOCOL_DESCRIPTOR,
+  AI_VALIDATION_TOOL_VERSION } from "./ai-game-protocol-v3";
+import { validateAiProposal } from "./ai-proposal-validation";
 
 type GameCommand = Extract<ClientMessage, { type: `game.${string}` }>;
 type ModelClient = {
@@ -144,6 +147,8 @@ export class AiPlayers {
           protocolId: identity.protocolId ?? identity.identityVersion ?? AI_LEGACY_V1_PROTOCOL_VERSION,
           ...(identity.protocolId === AI_GAME_PROTOCOL_IDENTITY_VERSION ? {
             protocolVersion: AI_GAME_PROTOCOL_VERSION, rulesRevision: AI_GAME_RULES_REVISION, protocolHash: AI_GAME_PROTOCOL_REVISION_HASH
+          } : identity.protocolId === AI_VALIDATION_IDENTITY_VERSION ? {
+            protocolVersion: AI_VALIDATION_PROTOCOL_VERSION, rulesRevision: AI_GAME_RULES_REVISION, protocolHash: AI_VALIDATION_PROTOCOL_DESCRIPTOR.policyHash
           } : {}), available: !reason, ...(reason ? { reason } : {}) };
       }) };
   }
@@ -256,7 +261,7 @@ export class AiPlayers {
     if (agent.failedTurns >= 3) {
       this.lastError.set(agent.identity.id, Date.now());
       this.forfeit(agent, observation.state.gameId, {
-        code: ["server-rejected", "invalid-command", "missed-declaration", "invalid-declaration"].includes(errorCode) ? "AI_INVALID_ACTION" : "AI_UNAVAILABLE",
+        code: ["server-rejected", "invalid-command", "missed-declaration", "invalid-declaration", "invalid-decision", "invalid-card-reference"].includes(errorCode) ? "AI_INVALID_ACTION" : "AI_UNAVAILABLE",
         message: "The AI could not complete three consecutive turns after retrying its selected model."
       });
     }
@@ -273,7 +278,8 @@ export class AiPlayers {
     const protocolId = identity.protocolId ?? identity.identityVersion ?? AI_LEGACY_V1_PROTOCOL_VERSION;
     const versioned = identity.protocolId !== undefined || identity.identityVersion !== undefined;
     const v2 = protocolId === AI_GAME_PROTOCOL_IDENTITY_VERSION;
-    if (!v2 && protocolId !== AI_LEGACY_V1_PROTOCOL_VERSION) {
+    const validationOnly = protocolId === AI_VALIDATION_IDENTITY_VERSION;
+    if (!v2 && !validationOnly && protocolId !== AI_LEGACY_V1_PROTOCOL_VERSION) {
       this.report("unknown-protocol", identity.id);
       this.forfeit(agent, observation.state.gameId); return;
     }
@@ -294,6 +300,7 @@ export class AiPlayers {
     const serverRevision = process.env.APP_REVISION;
     const context = { protocolId, matchId: observation.state.gameId, gameRevision: observation.state.revision,
       ...(v2 ? { toolsVersion: AI_RULES_TOOL_VERSION, declarationAvailable } : {}),
+      ...(validationOnly ? { toolsVersion: AI_VALIDATION_TOOL_VERSION, declarationAvailable: null } : {}),
       ...(serverRevision && serverRevision.length <= 100 ? { serverRevision } : {}) };
     const requestId = versioned ? await this.store.reserveRequest(identity.id, identity.modelId, this.dailyBudgetUsd, context)
       : await this.store.reserveRequest(identity.id, identity.modelId, this.dailyBudgetUsd);
@@ -329,13 +336,14 @@ export class AiPlayers {
       const errorCode = known?.code ?? "provider-unavailable";
       const costUsd = known?.metadata.usage?.costUsd ?? (["configuration", "invalid-rules-facts"].includes(errorCode) ? 0 : null);
       await finish(costUsd, false, { ...(known?.metadata.action ? { action: known.metadata.action } : {}),
-        outcome: ["missed-declaration", "invalid-declaration", "invalid-rules-facts"].includes(errorCode) ? "policy-rejected" : "provider-failed" });
+        outcome: ["missed-declaration", "invalid-declaration", "invalid-rules-facts"].includes(errorCode) || !!known?.metadata.validation ? "policy-rejected" : "provider-failed" });
       this.report("model-request-failed", identity.id, {
         gameId: observation.state.gameId, modelId: identity.modelId, revision: observation.state.revision,
         phase: observation.state.phase, handCount: observation.hand.length, requestId,
         attempt: (agent.failureRevision === observation.state.revision ? agent.failures : 0) + 1,
         errorCode, elapsedMs: Date.now() - started, remainingMs: this.remainingTime(observation), costUsd,
         protocolId, ...(v2 ? { toolsVersion: AI_RULES_TOOL_VERSION, declarationAvailable } : {}),
+        ...(validationOnly ? { toolsVersion: AI_VALIDATION_TOOL_VERSION, declarationAvailable: null } : {}),
         ...(known?.metadata.status === undefined ? {} : { httpStatus: known.metadata.status }),
         ...(known?.metadata.finishReason === undefined ? {} : { finishReason: known.metadata.finishReason })
       });
@@ -344,7 +352,9 @@ export class AiPlayers {
         this.lastError.set(identity.id, Date.now());
         this.forfeit(agent, observation.state.gameId, { code: "AI_UNAVAILABLE",
           message: permanentAccessFailure ? "The AI could not continue because its model provider denied access." : "The AI could not continue with its configured model." });
-      } else this.recover(agent, observation, errorCode, `The previous model response failed: ${errorCode}. Please return a complete valid decision.`);
+      } else this.recover(agent, observation, errorCode, validationOnly && known?.metadata.validation
+        ? `Your proposed move was rejected: ${known.metadata.validation.message} Return a corrected legal decision.`
+        : `The previous model response failed: ${errorCode}. Please return a complete valid decision.`);
       return;
     }
     if (this.stopped) return;
@@ -357,6 +367,19 @@ export class AiPlayers {
       await outcome({ outcome: "provider-failed" });
       this.forfeit(agent, observation.state.gameId);
       return;
+    }
+    if (validationOnly) {
+      const validation = validateAiProposal(observation, result.decision);
+      if (!validation.valid) {
+        await outcome({ outcome: "policy-rejected" });
+        this.report("model-action-rejected", identity.id, { gameId: observation.state.gameId, modelId: identity.modelId,
+          revision: observation.state.revision, phase: observation.state.phase, handCount: observation.hand.length,
+          requestId, errorCode: validation.validation.code, protocolId,
+          toolsVersion: AI_VALIDATION_TOOL_VERSION, declarationAvailable: null });
+        this.recover(agent, observation, validation.validation.code,
+          `Your proposed move was rejected: ${validation.validation.message} Return a corrected legal decision.`);
+        return;
+      }
     }
     // Recheck locally as well as in the provider adapter. Only the model's own
     // validated command is ever executed; a tool plan cannot play a move.

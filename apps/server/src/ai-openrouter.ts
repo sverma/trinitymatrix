@@ -6,6 +6,11 @@ import {
   AI_LEGACY_V1_SYSTEM_PROMPT, buildSystemPrompt, type AiGameRulesFacts
 } from "./ai-game-protocol";
 import {
+  AI_VALIDATION_IDENTITY_VERSION, AI_VALIDATION_PROTOCOL_VERSION, AI_VALIDATION_PROTOCOL_REVISION_HASH,
+  AI_VALIDATION_TOOL_VERSION, buildValidationSystemPrompt
+} from "./ai-game-protocol-v3";
+import { validateAiProposal, type AiProposalValidationFeedback } from "./ai-proposal-validation";
+import {
   cardSchema,
   gamePublicStateSchema,
   publicPlayerSchema,
@@ -82,6 +87,7 @@ export type OpenRouterAgentErrorMetadata = {
   finishReason?: string;
   usage?: AiAgentUsage;
   action?: AiAgentDecision["action"];
+  validation?: AiProposalValidationFeedback;
 };
 
 export type OpenRouterAgentErrorCode =
@@ -204,6 +210,26 @@ function modelReasoningOptions(modelId: string) {
   return undefined;
 }
 
+/**
+ * v3 must plan its own cards. Keep historical v1/v2 inference settings above pinned.
+ * OpenRouter reasoning consumes the same 1600-token output budget; exclude hides
+ * traces, not computation. Exact capabilities checked against /api/v1/models on
+ * 2026-11-13; https://openrouter.ai/docs/guides/best-practices/reasoning-tokens.
+ */
+function validationModelReasoningOptions(modelId: string) {
+  if (["openai/gpt-6.1-terra", "google/gemini-3.8-flash"].includes(modelId)) {
+    return { effort: "low", exclude: true };
+  }
+  // These exact models expose a token budget. Leave 1088 tokens for final JSON.
+  if (["qwen/qwen3.8-flash", "nvidia/nemotron-3-ultra-550b-a55b"].includes(modelId)) {
+    return { max_tokens: 512, exclude: true };
+  }
+  // Bounded live qualification found more truncations/timeouts with reasoning
+  // for Haiku, DeepSeek, GPT Mini, MiMo and GLM. Keep their historical settings
+  // rather than changing models or increasing the shared token/time limits.
+  return modelReasoningOptions(modelId);
+}
+
 function nonnegativeNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
@@ -301,9 +327,12 @@ export class OpenRouterAgentClient {
     modelId: string; observation: AiAgentObservation; memory: string; timeoutMs?: number;
     protocolId?: string | undefined; rulesFacts?: AiGameRulesFacts | undefined
   }): Promise<AiAgentDecisionResult> {
-    const protocolId = input.protocolId ?? AI_GAME_PROTOCOL_IDENTITY_VERSION;
-    if (protocolId !== AI_GAME_PROTOCOL_IDENTITY_VERSION && protocolId !== AI_LEGACY_V1_PROTOCOL_VERSION) throw new OpenRouterAgentError("configuration");
+    const protocolId = input.protocolId ?? AI_VALIDATION_IDENTITY_VERSION;
+    if (protocolId !== AI_VALIDATION_IDENTITY_VERSION && protocolId !== AI_GAME_PROTOCOL_IDENTITY_VERSION
+      && protocolId !== AI_LEGACY_V1_PROTOCOL_VERSION) throw new OpenRouterAgentError("configuration");
     const v2 = protocolId === AI_GAME_PROTOCOL_IDENTITY_VERSION;
+    const v3 = protocolId === AI_VALIDATION_IDENTITY_VERSION;
+    if (v3 && input.rulesFacts !== undefined) throw new OpenRouterAgentError("invalid-rules-facts");
     if (input.timeoutMs !== undefined && (!Number.isInteger(input.timeoutMs) || input.timeoutMs < 1 || input.timeoutMs > AI_MAX_DECISION_TIME_MS)) {
       throw new OpenRouterAgentError("configuration");
     }
@@ -322,12 +351,16 @@ export class OpenRouterAgentClient {
     const rulesFacts = v2 ? validatedRulesFacts(input.rulesFacts, observation) : undefined;
     const mustDeclare = rulesFacts?.status === "complete" && !!rulesFacts.immediateDeclaration;
     const timeoutMs = Math.min(input.timeoutMs ?? this.timeoutMs, this.timeoutMs);
-    const reasoning = modelReasoningOptions(input.modelId);
+    const reasoning = v3 ? validationModelReasoningOptions(input.modelId) : modelReasoningOptions(input.modelId);
     const body = JSON.stringify({
       model: input.modelId,
       messages: [
-        { role: "system", content: v2 ? buildSystemPrompt() : systemPrompt },
-        { role: "user", content: JSON.stringify(v2 ? {
+        { role: "system", content: v3 ? buildValidationSystemPrompt() : v2 ? buildSystemPrompt() : systemPrompt },
+        { role: "user", content: JSON.stringify(v3 ? {
+          protocol: { id: protocolId, version: AI_VALIDATION_PROTOCOL_VERSION, rulesRevision: AI_GAME_RULES_REVISION,
+            policyHash: AI_VALIDATION_PROTOCOL_REVISION_HASH, assistanceMode: "validation-only", toolsVersion: AI_VALIDATION_TOOL_VERSION },
+          observation, memory: input.memory
+        } : v2 ? {
           protocol: { id: protocolId, version: AI_GAME_PROTOCOL_VERSION, rulesRevision: AI_GAME_RULES_REVISION, policyHash: AI_GAME_PROTOCOL_REVISION_HASH },
           observation, memory: input.memory, rulesFacts
         } : { observation, memory: input.memory }) }
@@ -354,7 +387,7 @@ export class OpenRouterAgentClient {
       rejectTimeout?.(new OpenRouterAgentError("timeout"));
     }, timeoutMs);
     try {
-      return await Promise.race([this.request(body, input.modelId, observation, controller.signal, { v2, mustDeclare }), timeout]);
+      return await Promise.race([this.request(body, input.modelId, observation, controller.signal, { v2, v3, mustDeclare }), timeout]);
     } catch (error) {
       if (error instanceof OpenRouterAgentError) throw error;
       throw new OpenRouterAgentError(controller.signal.aborted ? "timeout" : "provider-unavailable");
@@ -374,7 +407,7 @@ export class OpenRouterAgentClient {
   }
 
   private async request(body: string, modelId: string, observation: AiAgentObservation, signal: AbortSignal,
-    policy: { v2: boolean; mustDeclare: boolean }): Promise<AiAgentDecisionResult> {
+    policy: { v2: boolean; v3: boolean; mustDeclare: boolean }): Promise<AiAgentDecisionResult> {
     const response = await this.fetcher(endpoint, {
       method: "POST",
       headers: {
@@ -421,12 +454,19 @@ export class OpenRouterAgentClient {
     if (typeof choice.message.content !== "string") throw new OpenRouterAgentError("invalid-json", metadata);
     let content: unknown;
     try { content = JSON.parse(choice.message.content); } catch { throw new OpenRouterAgentError("invalid-json", metadata); }
-    if (policy.v2 && content && typeof content === "object") {
+    if ((policy.v2 || policy.v3) && content && typeof content === "object") {
       const reportedAction = actionSchema.safeParse("action" in content ? content.action : undefined);
       if (reportedAction.success) metadata.action = reportedAction.data;
     }
     const decision = decisionSchema.safeParse(content);
-    if (!decision.success) throw new OpenRouterAgentError("invalid-decision", metadata);
+    if (!decision.success) throw new OpenRouterAgentError("invalid-decision", {
+      ...metadata, ...(policy.v3 ? { validation: { toolVersion: AI_VALIDATION_TOOL_VERSION, code: "invalid-decision" as const,
+        message: "Return strict JSON with exactly action, cardId, groups and memory, using bounded exact owned card IDs." } } : {})
+    });
+    if (policy.v3) {
+      const result = validateAiProposal(observation, decision.data);
+      if (!result.valid) throw new OpenRouterAgentError(result.validation.code, { ...metadata, validation: result.validation });
+    }
     if (policy.v2 && allowedActions(observation).includes(decision.data.action)) {
       if (policy.mustDeclare && decision.data.action !== "declare") throw new OpenRouterAgentError("missed-declaration", metadata);
       if (decision.data.action === "declare"
@@ -434,7 +474,7 @@ export class OpenRouterAgentClient {
         throw new OpenRouterAgentError("invalid-declaration", metadata);
       }
     }
-    const normalizedDecision = validateOwnedCards(decision.data, observation, metadata);
+    const normalizedDecision = policy.v3 ? decision.data : validateOwnedCards(decision.data, observation, metadata);
     return {
       decision: normalizedDecision,
       modelId,

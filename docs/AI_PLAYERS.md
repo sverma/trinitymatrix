@@ -1,23 +1,24 @@
 # Persistent model-backed AI players
 
 AI players use actual OpenRouter model decisions for every draw, discard,
-declaration and final layout. Protocol v2 prioritizes winning at the earliest
-legal opportunity: declare a ready hand instead of waiting for more points.
-A shared rules tool checks only the player's own hand and public state and may
-provide a legal declaration candidate. The selected model still returns every
-action; the server never automatically plays the candidate.
+declaration and final layout. Protocol v3 uses validation-only assistance:
+the selected model finds its own melds and aims to win in as few moves as possible.
+The server validates only the move and groups the model proposes. It does not
+search for a winning hand, supply candidate arrangements or require a declaration
+based on a hidden readiness check. A legal missed-win discard is accepted and
+counts as a playing-strength outcome, not a protocol failure.
 
 The shared game engine applies the same Trinity rules and penalties to humans
-and AI. V2 also checks model responses before dispatch, like client-side legality
-checks. A declaration committed to the engine still incurs the normal drop if
+and AI. V3 checks proposed model responses before dispatch, like client-side
+legality checks. A declaration committed to the engine still incurs the normal drop if
 invalid. See the [versioned AI game protocol](AI_GAME_PROTOCOL.md) for the winning
 objective, tool boundary and request contract.
 
 ## Identities and configured roster
 
-Thirteen model families are configured for the default v2 cohort. Current players
+Thirteen model families are configured for the default v3 cohort. Current players
 use ordinary model names, and the pickers retain protocol metadata. Earlier
-agents are labelled `· v0` outside broadcasts. Broadcast names, generated table
+agents are labelled `· v2` (solver-assisted) or `· v0` (original) outside broadcasts. Broadcast names, generated table
 titles, winners and move feeds omit agent version suffixes, including archived
 broadcasts. Configuration does not imply that a model has passed operator qualification or is available:
 
@@ -44,24 +45,23 @@ through upgrades. The unsuffixed DeepSeek Flash slug
 has its own identity; the retired `deepseek/deepseek-v4.1-flash-1017` identity and
 its history are retained outside the selectable roster.
 
-Model IDs and prompt versions are immutable database fields. V2 stores its
+Model IDs and prompt versions are immutable database fields. V3 stores its
 semantic protocol version and policy hash in the version binding. A policy
-revision creates a separate deterministic identity for each model. Earlier profiles,
-memory, ratings and results remain intact under the public v0 label. Their
-original `trinity-v1` prompt binding remains immutable for audit and recovery.
-V2 is the default for identity generation, provisioning and new database rows.
-This presentation change reuses the existing v2 identities and their running
-ratings; it does not create another cohort or reset ratings. Human-only and
-existing human mixed ratings are preserved.
+revision creates a separate deterministic identity for each model. V3 is the
+default for identity generation, provisioning and new database rows, with fresh
+AI-only and mixed ratings and fresh private notes. Earlier v2 identities keep
+their solver-assisted policy, memory, ratings and results. Original profiles
+remain under the public v0 label with the immutable `trinity-v1` prompt binding.
+Human-only ratings and existing human mixed ratings are preserved.
 Provider-side weights behind a model slug can
 still change; this is not a guarantee of reproducible model weights.
 
 Each identity has a stable UUID, profile, bounded persistent memory and match
 history. One identity occupies one active table at a time. Its roster entry says
 when it is busy. There is no automatic background tournament or idle inference.
-Only the current cohort can join new games. An active legacy (v0) participant
-remains registered with its original `trinity-v1` protocol until that game ends, including across
-a server restart. It is excluded from new-match selection.
+Only the current cohort can join new games. An active earlier v2 or v0 participant
+remains registered with its original protocol until that game ends, including
+across a server restart. It is excluded from new-match selection.
 Humans can select one available AI for a two-player table, or any five available
 AIs for a six-player table. An unlocked administrator can select any two or any
 six available AIs in **AI arena** to start an AI-only match.
@@ -84,7 +84,9 @@ remain unranked. Changing leaderboard tabs never combines these rating pools.
 Run the migration CLI before deploying the updated production server. Migration
 `0008_model_bound_ai_players.sql` adds identities, scoped ratings and the ledger;
 `0010_ai_protocol_provenance.sql` adds the immutable protocol registry and nullable
-request provenance. Existing migration files and historical results are retained.
+request provenance. `0012_validation_only_ai.sql` changes the default to the
+hash-bound v3 policy and preserves earlier cohorts. Existing migration files
+and historical results are retained.
 
 Add to the private runtime environment (never commit the key):
 
@@ -149,12 +151,21 @@ Requests are capped at 24 KB, 1,600 output tokens and 20 seconds, with endpoint
 prices capped at USD 1/M input tokens and USD 5/M output tokens and zero
 per-request charge. Public search/browser tools are not enabled. Actions and
 card IDs are constrained to the current turn stage and the agent's own hand.
-The own-hand rules tool additionally checks declaration legality. Its work is
-bounded within the existing turn deadline; an unavailable check means unknown,
-not proof that no winning declaration exists. The model still chooses the move.
+The v3 proposal validator checks only supplied moves and layouts, without hand
+search or readiness facts. A legal discard is not rejected because another move
+could win. V2 recovery retains its original bounded own-hand rules tool and
+mandatory-declare policy; unavailable v2 facts mean unknown.
 
-A transient provider/format error gets one correction retry using the same model
-and a new budget reservation. Each call is capped by the remaining normal turn
+V3 permits bounded internal model reasoning for the exact Terra and Gemini
+bindings (low effort), and Qwen and Nemotron (512 reasoning tokens). These tokens
+share the existing 1,600-token output cap and 20-second request deadline; private
+reasoning traces are excluded. Other bindings retain their established inference
+settings after provider trials found truncation or deadline failures with added
+reasoning. Operator availability remains independent of this configuration.
+
+A transient provider/format error or invalid v3 proposal gets one correction
+retry using the same model and a new budget reservation. V3 correction feedback
+is bounded to the validation code and safe reason; it supplies no winning plan. Each call is capped by the remaining normal turn
 deadline, with a one-second safety margin. After two failed attempts for the same
 revision, requests pause and the normal human timeout rule handles that turn.
 A technical forfeit occurs only after three consecutive failed AI turns, or an
@@ -172,7 +183,9 @@ The immutable protocol registry stores policy hashes, semantic versions, the
 rules revision and metadata-only capability manifests. Each new request can
 record its bound protocol, match/game revision, tool version, server build,
 whether a declaration was available, chosen action and validation outcome.
-Unavailable tool results use an unknown (`null`) declaration flag. These audit
+V3 always records an unknown (`null`) declaration flag because it never computes
+readiness, and records `proposed-move-validation/1.0.0` as its tool version.
+Unavailable historical v2 tool results also use a `null` declaration flag. These audit
 fields contain no raw prompts, hands, memory or provider bodies. Older requests
 retain null provenance rather than being assigned an invented historical policy.
 All versions continue to share the same UTC-day spending ledger.
@@ -193,8 +206,9 @@ Adapter tests mock OpenRouter and do not incur model charges. Runtime tests
 exercise actual game commands with a simulated model client. Isolated real
 PostgreSQL tests cover rating migration/isolation, immutable identities,
 restart memory and concurrent budget reservations. Operator qualification uses
-each selectable identity's bound protocol and the same bounded rules worker as
-runtime play. It supports both ordinary full turns and an immediate-win fixture:
+each selectable identity's bound protocol and assistance contract. V3 validates
+proposed moves only; historical v2 uses its bounded rules worker. Qualification
+supports both ordinary full turns and an immediate-win fixture:
 
 ```sh
 node dist/ops/ai-check.js --turns 10 MODEL_ID
@@ -212,13 +226,16 @@ selection. Profile memory and ratings are never changed.
 
 `--winning-hand` starts with the sanitized 14-card hand from the missed-declaration
 regression. It defaults to one turn, with at most two same-model attempts. A legal
-discard is a failed policy decision in this scenario, not a passing turn; the
-model must choose a valid declaration. `--turns 1..10` can explicitly repeat the
-fixture. The rules tool's candidate is never automatically executed.
+discard is a missed winning opportunity. V3 accepts the legal move without a
+forced declaration retry and reports the missed win separately from move
+validity. Historical v2 requires a valid declaration in this scenario.
+`--turns 1..10` can explicitly repeat the fixture. No candidate is automatically
+executed.
 
-V2 rejects missed winning declarations and invalid declaration plans before
-engine dispatch, then retries the same model within the normal deadline and
-shared spending budget. Legacy full-turn fixtures preserve their old behavior:
+V3 rejects invalid proposed declaration plans before engine dispatch and retries
+the same model with a safe validation reason. It never rejects a legal move for
+missing a win. Historical v2 also rejects missed winning declarations and retries
+within the normal deadline and shared spending budget. Legacy full-turn fixtures preserve their old behavior:
 an invalid declaration is a committed normal rule loss, recorded separately from
 technical failures, and qualification continues with a fresh disposable game.
 The authoritative engine's invalid-declaration penalty is unchanged.

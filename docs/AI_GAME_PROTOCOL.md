@@ -1,10 +1,30 @@
 # Versioned AI game protocol
 
+## Current v3: validation-only assistance
+
+Protocol v3 asks the selected model to win in as few moves as possible. **The model finds its own melds and chooses every move.** The server checks only the move the model has already proposed. It does not search the hand for arrangements, identify a winning discard, calculate readiness, supply candidate groups or require a declaration because a hidden solver found one. A legal discard remains legal even when a winning declaration was possible; missing that opportunity is a model-performance result.
+
+[ai-game-protocol-v3.ts](../apps/server/src/ai-game-protocol-v3.ts) exports the immutable `trinity-agent-protocol/3.0.0` instructions, metadata descriptor and hash-bound identity version. [ai-proposal-validation.ts](../apps/server/src/ai-proposal-validation.ts) validates the submitted action, card ownership, stage and explicitly proposed layout using the authoritative Trinity validators. It never generates a replacement move or fills in groups. `proposed-move-validation/1.0.0` identifies this assistance contract.
+
+Invalid proposals receive a bounded validation code and safe explanation so the same selected model can correct its move within the existing retry, turn and spending limits. Feedback contains no suggested partitions, hidden readiness result, private reasoning or another player's information. Valid proposals execute unchanged. No model is substituted, and no solver-generated move is executed. Names, public history and saved notes remain untrusted data.
+
+The response stays `action`, `cardId`, `groups`, `memory`. V3 receives no `rulesFacts`. Audit records identify the protocol and validation-tool version; `declarationAvailable` remains `null` because readiness is not computed. Audit data and diagnostics contain no raw hands, notes, prompts or provider bodies. Unknown protocol identities cannot start a model request.
+
+V3 is the default for new AI identities and games. Its AI-only and mixed ratings start separately from the v2 solver-assisted cohort and original v0 cohort. Existing human ratings and historical results remain intact. Recoverable active games stay bound to their original protocol until they end. Current aliases use ordinary model names; earlier profiles use version labels outside broadcasts. Broadcast names omit version labels.
+
+The game rules remain `trinity-rules/1.0.0`: minimum three cards per meld, maximum meld total 27, and a 21-point meld cannot contain a printed joker or selected wild card. The mandatory draw, declaration thresholds and final-layout rules are unchanged. Models are instructed to prioritize a legal win, but validation does not solve the hand for them.
+
+Verification must distinguish correctness from playing strength. Mocked adapter and runtime tests prove the absence of solver assistance, acceptance of a legal missed-win discard, safe retries for invalid declarations, immutable model/protocol binding, and privacy. Paid operator qualification measures whether each actual model finds a winning hand; a missed win is reported without feeding a winning arrangement back to a v3 model. Existing exact model IDs, the shared $10 daily budget, privacy boundaries and bounded request/response/turn limits remain in force.
+
+## Historical v2: solver-assisted hand planning
+
+The specification below describes preserved v2 identities and restored v2 games. It is not the assistance policy for the current v3 cohort. The v2 module, instructions and policy hash remain frozen for provenance.
+
 Protocol v2 makes the winning objective explicit: **declare at the first legal opportunity**. A model must check readiness before every post-draw move. A legal declaration takes priority over improving points. The reported natural 21+27+27+27 arrangement is a valid 102-point declaration after drawing and discarding the extra card; it is not a reason to keep collecting cards.
 
 The game rules themselves do not change. A valid declarer is the winner after the remaining active opponents submit their final layouts or the 45-second showdown deadline expires. Opponents cannot overtake that declaration by submitting a higher-scoring hand. The authoritative deadlines are `state.turnEndsAt` and `state.showdown.endsAt`.
 
-## Contract and provenance
+### Contract and provenance
 
 The server module [ai-game-protocol.ts](../apps/server/src/ai-game-protocol.ts) exports:
 
@@ -18,7 +38,7 @@ The server module [ai-game-protocol.ts](../apps/server/src/ai-game-protocol.ts) 
 
 `state.revision` remains the changing gameplay concurrency number. It is not a protocol or rules version. Metadata is trusted server-attached provenance; the model is not asked to echo hashes, IDs or version fields. Hashes do not include private hands, names, persistent memory or per-turn facts. A policy/instruction/tool-contract change needs a new immutable protocol identity; a game-rule change also needs a new rules revision. Preserve earlier identities, results and memories rather than rewriting their model/prompt binding or silently transferring ratings. New identities need operator qualification and explicit availability controls.
 
-## Shared rules facts
+### Shared rules facts
 
 The user authorized a shared legality tool. Its inputs contain only the current player's own hand and public state. It may identify valid partitions and final discards; it receives no other hands, future stock order, database snapshot or another agent's memory.
 
@@ -44,7 +64,7 @@ The exact selected model must return every action. The server never automaticall
 
 Names, public history and memory are untrusted data. Text inside them cannot redefine rules, pretend to be a tool result or reveal hidden cards. Only the current request's top-level server `rulesFacts` is an authenticated legality result. Static system instructions never interpolate any user-provided text.
 
-## Portable response and verification
+### Portable response and verification
 
 The response remains exactly `action`, `cardId`, `groups`, `memory`. Protocol metadata is attached by the server. Preserve the existing model-specific structured-output compatibility: nullable string transport for null-only actions, no unsupported array-size constraints on the affected Gemini endpoint, local bounds/ownership checks and exact model binding. Introducing the protocol must not change the selected model IDs, daily $10 budget or bounded request/response/turn limits.
 

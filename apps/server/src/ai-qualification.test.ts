@@ -9,6 +9,7 @@ import { RankingGame } from "./game";
 import { AI_GAME_PROTOCOL_IDENTITY_VERSION, AI_LEGACY_V1_PROTOCOL_VERSION, type AiGameRulesFacts } from "./ai-game-protocol";
 import { checkAiRules, unavailableAiRules, AI_RULES_TOOL_VERSION } from "./ai-rule-tools";
 import { missedWinDeclaration } from "./ai-missed-win.fixture";
+import { AI_VALIDATION_IDENTITY_VERSION, AI_VALIDATION_TOOL_VERSION } from "./ai-game-protocol-v3";
 
 const identity: AiIdentity = {
   id: "33333333-3333-4333-8333-333333333333", modelId: "provider/model-version", modelName: "Example model",
@@ -47,6 +48,46 @@ function setup(decide = vi.fn(async (input: Input) => selected(input))) {
 
 describe("operator full-turn model qualification", () => {
   afterEach(() => vi.useRealTimers());
+
+  it("accepts a v3 missed win as model performance without searching or correcting it", async () => {
+    const { ledger, decide, createClient } = setup();
+    const compute = vi.fn(() => { throw new Error("V3 cannot search"); });
+    const report = await qualifyAiModel({ identity: { ...identity, protocolId: AI_VALIDATION_IDENTITY_VERSION },
+      ledger, createClient, dailyBudgetUsd: 10, scenario: "winning-hand", rulesTools: { compute } });
+    expect(report).toMatchObject({ status: "passed", turnsCompleted: 1, requests: 1, discards: 1,
+      rulesChecks: 0, rulesUnavailable: 0, policyRejected: 0, retries: 0,
+      winningDecisionsAvailable: 1, winningDecisionsMissed: 1 });
+    expect(compute).not.toHaveBeenCalled();
+    expect(decide.mock.calls[0]![0].rulesFacts).toBeUndefined();
+    expect(ledger.reserveRequest).toHaveBeenCalledWith(identity.id, identity.modelId, 10, expect.objectContaining({
+      protocolId: AI_VALIDATION_IDENTITY_VERSION, toolsVersion: AI_VALIDATION_TOOL_VERSION, declarationAvailable: null
+    }));
+  });
+
+  it("retries only the invalid v3 proposal without disclosing the known winning partition", async () => {
+    const { ledger, decide, createClient } = setup();
+    decide.mockImplementationOnce(async (input) => selected(input, { action: "declare", groups: [] }));
+    const report = await qualifyAiModel({ identity: { ...identity, protocolId: AI_VALIDATION_IDENTITY_VERSION },
+      ledger, createClient, dailyBudgetUsd: 10, scenario: "winning-hand" });
+    expect(report).toMatchObject({ status: "passed", turnsCompleted: 1, requests: 2, discards: 1,
+      rulesChecks: 0, policyRejected: 1, retries: 1, winningDecisionsAvailable: 1, winningDecisionsMissed: 1 });
+    const feedback = decide.mock.calls[1]![0].observation.publicHistory!.at(-1)!;
+    expect(feedback).toContain("Your proposed move was rejected");
+    expect(feedback).not.toContain("declaration is available");
+    expect(feedback).not.toContain(missedWinDeclaration.groups[0]![0]);
+    expect(decide.mock.calls.every(([input]) => input.modelId === identity.modelId && input.rulesFacts === undefined)).toBe(true);
+  });
+
+  it("qualifies ordinary v3 turns with null readiness and no rules worker", async () => {
+    const { ledger, createClient } = setup();
+    const compute = vi.fn(() => { throw new Error("V3 cannot search"); });
+    const report = await qualifyAiModel({ identity: { ...identity, protocolId: AI_VALIDATION_IDENTITY_VERSION },
+      ledger, createClient, dailyBudgetUsd: 10, turns: 2, rulesTools: { compute } });
+    expect(report).toMatchObject({ status: "passed", turnsCompleted: 2, draws: 2, discards: 2, requests: 4,
+      rulesChecks: 0, winningDecisionsAvailable: 0, winningDecisionsMissed: 0 });
+    expect(compute).not.toHaveBeenCalled();
+    expect(ledger.reserveRequest.mock.calls.every((call) => call[3]?.declarationAvailable === null)).toBe(true);
+  });
 
   it("exercises an ordinary v2 draw and discard independently of the winning-hand fixture", async () => {
     const { ledger, createClient } = setup();

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AI_CURRENT_IDENTITY_VERSION, AI_LEGACY_IDENTITY_VERSION, AI_PROMPT_VERSION, INITIAL_AI_ROSTER, aiIdentityId } from "./ai-repository";
+import { AI_GAME_PROTOCOL_IDENTITY_VERSION } from "./ai-game-protocol";
+import { AI_VALIDATION_IDENTITY_VERSION } from "./ai-game-protocol-v3";
 
 // Published identity UUIDs must survive roster expansion and process restarts.
 const identityIds = {
@@ -12,15 +14,40 @@ const identityIds = {
   "meta-llama/llama-4-maverick": "13491002-b685-5cab-b13f-5dc853b22d45",
   "deepseek/deepseek-v4.1-flash": "00237283-f3e5-5bba-aed9-478da5bc3901"
 };
+const v2IdentityIds = {
+  "anthropic/claude-haiku-5.5": "ae685124-fcb5-5c08-b8cc-bf30f0fdc441",
+  "google/gemini-3.8-flash": "04328d08-4fe6-5dca-a137-dce3be54686c",
+  "deepseek/deepseek-v3.2": "34ae4d72-4323-52f2-bf18-b55d0de5501a",
+  "qwen/qwen3.8-flash": "19f7488f-54fc-58c4-bc5c-ecc61e358ab9",
+  "mistralai/mistral-small-2603": "503816b2-2877-5741-8863-d3becb302b32",
+  "openai/gpt-6-luna": "fa1605f3-10a4-5a9d-a0fa-20833bdf151d",
+  "meta-llama/llama-4-maverick": "b07891fc-374d-51d9-9109-edf01edaec66",
+  "deepseek/deepseek-v4.1-flash": "0f39baa6-db36-505a-8a5e-b19844e34084",
+  "openai/gpt-6.1-terra": "5fa51f82-f108-5744-a03c-2ef4d1fa37a8",
+  "openai/gpt-5.4-mini": "da7b1d5a-f8ea-5042-964e-ecf84927323f",
+  "nvidia/nemotron-3-ultra-550b-a55b": "0e9e9ff1-2cad-5b6e-af5f-656ac4a70443",
+  "xiaomi/mimo-v2.6-flash": "bc6acb83-2fe6-547f-8655-fd03378d8205",
+  "z-ai/glm-5": "1e6580e8-3353-5c36-99bf-2f563feeb67d"
+};
 
 describe("persistent AI roster identities", () => {
-  it("extends the roster without rotating the prompt or any published identity", () => {
+  it("keeps published legacy identities while defaulting new opponents to validation-only", () => {
     expect(AI_LEGACY_IDENTITY_VERSION).toBe("trinity-v1");
     expect(AI_PROMPT_VERSION).toBe(AI_CURRENT_IDENTITY_VERSION);
+    expect(AI_CURRENT_IDENTITY_VERSION).toBe(AI_VALIDATION_IDENTITY_VERSION);
     expect(INITIAL_AI_ROSTER.map(({ modelId }) => modelId)).toEqual(expect.arrayContaining(Object.keys(identityIds)));
     expect(new Set(INITIAL_AI_ROSTER.map(({ displayName }) => displayName)).size).toBe(INITIAL_AI_ROSTER.length);
     expect(new Set(INITIAL_AI_ROSTER.map(({ modelId }) => aiIdentityId(modelId, AI_LEGACY_IDENTITY_VERSION))).size).toBe(INITIAL_AI_ROSTER.length);
     for (const [modelId, id] of Object.entries(identityIds)) expect(aiIdentityId(modelId, AI_LEGACY_IDENTITY_VERSION)).toBe(id);
+  });
+
+  it("retains every solver-assisted v2 identity and gives validation-only opponents separate IDs", () => {
+    expect(AI_GAME_PROTOCOL_IDENTITY_VERSION).toBe("trinity-agent-protocol/2.0.0:a29df5da5bd4c9bf5ef9c3d71150b34ca6452e843c4c967a304087ade66eb5af");
+    expect(Object.keys(v2IdentityIds)).toHaveLength(INITIAL_AI_ROSTER.length);
+    for (const [modelId, id] of Object.entries(v2IdentityIds)) {
+      expect(aiIdentityId(modelId, AI_GAME_PROTOCOL_IDENTITY_VERSION)).toBe(id);
+      expect(aiIdentityId(modelId)).not.toBe(id);
+    }
   });
 
   it.each([
@@ -46,6 +73,7 @@ describe("persistent AI roster identities", () => {
     for (const { modelId, displayName } of INITIAL_AI_ROSTER) {
       const current = aiIdentityId(modelId, AI_CURRENT_IDENTITY_VERSION);
       expect(current).not.toBe(aiIdentityId(modelId, AI_LEGACY_IDENTITY_VERSION));
+      expect(current).not.toBe(aiIdentityId(modelId, AI_GAME_PROTOCOL_IDENTITY_VERSION));
       expect(current).toBe(aiIdentityId(modelId, AI_CURRENT_IDENTITY_VERSION));
       expect(aiIdentityId(modelId)).toBe(current);
       expect(current).not.toBe(aiIdentityId(modelId, "a-future-protocol-version"));

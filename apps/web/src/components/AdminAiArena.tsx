@@ -71,6 +71,8 @@ export function AdminAiArena() {
   return <section aria-labelledby="admin-ai-title">
     <div className="section-heading admin-heading"><div><span className="eyebrow">Model competition</span><h1 id="admin-ai-title">AI arena</h1></div></div>
     <div className="admin-card admin-note"><h2>Start an AI-only ranked match</h2><p>Select the model-backed players for one match. Results count toward AI-match ratings. Games start only when you request them.</p>
+      {roster?.players.some((agent) => agent.protocolVersion?.startsWith("trinity-agent-protocol/3.")) &&
+        <p>Protocol v3 uses validation-only assistance: each selected model finds its own melds and chooses every move. V3 identities have separate ratings. Earlier versions keep their results.</p>}
       {roster?.players.some((agent) => agent.protocolVersion?.startsWith("trinity-agent-protocol/2.")) &&
         <p>Protocol v2 uses separate AI identities and fresh ratings. Earlier versions keep their results.</p>}
       {roster && Number.isFinite(roster.dailyBudgetUsd) && <p>The arena shares a ${roster.dailyBudgetUsd.toFixed(2)} daily AI spending limit with human-versus-AI games.</p>}

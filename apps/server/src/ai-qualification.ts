@@ -9,6 +9,8 @@ import { AI_GAME_PROTOCOL_IDENTITY_VERSION, AI_LEGACY_V1_PROTOCOL_VERSION, type 
 import { AiRuleToolService } from "./ai-rule-tool-service";
 import { unavailableAiRules } from "./ai-rule-tools";
 import { missedWinHand14, missedWinWildRank } from "./ai-missed-win.fixture";
+import { AI_VALIDATION_IDENTITY_VERSION, AI_VALIDATION_TOOL_VERSION } from "./ai-game-protocol-v3";
+import { validateAiProposal } from "./ai-proposal-validation";
 
 type QualificationClient = {
   decide(input: { modelId: string; observation: AiAgentObservation; memory: string; protocolId: string; rulesFacts?: AiGameRulesFacts }): Promise<AiAgentDecisionResult>;
@@ -124,6 +126,7 @@ export async function qualifyAiModel(options: {
   const { identity, ledger } = options;
   const protocolId = identity.protocolId ?? AI_LEGACY_V1_PROTOCOL_VERSION;
   const v2 = protocolId === AI_GAME_PROTOCOL_IDENTITY_VERSION;
+  const validationOnly = protocolId === AI_VALIDATION_IDENTITY_VERSION;
   const scenario = options.scenario ?? "full-turn";
   if (!["full-turn", "winning-hand"].includes(scenario)) throw new Error("Unknown qualification scenario.");
   const report: AiQualificationReport = {
@@ -136,7 +139,7 @@ export async function qualifyAiModel(options: {
   };
   const record = (code: string) => { report.errors[code] = (report.errors[code] ?? 0) + 1; };
   if (!identity.enabled) { record("agent-disabled"); return report; }
-  if (!v2 && protocolId !== AI_LEGACY_V1_PROTOCOL_VERSION) { record("configuration"); report.status = "failed"; return report; }
+  if (!v2 && !validationOnly && protocolId !== AI_LEGACY_V1_PROTOCOL_VERSION) { record("configuration"); report.status = "failed"; return report; }
   const ownedTools = v2 && !options.rulesTools ? new AiRuleToolService() : null;
   const rulesTools = options.rulesTools ?? ownedTools;
   let syntheticHumanId = randomUUID();
@@ -165,6 +168,9 @@ export async function qualifyAiModel(options: {
         playerId: identity.id, state, hand: game.handFor(identity.id),
         publicHistory: [...publicHistory, ...(feedback ? [feedback] : [])]
       };
+      // The known fixture supplies an offline performance metric only. Never
+      // search ordinary v3 hands or send readiness information to the model.
+      if (validationOnly && scenario === "winning-hand" && attempts === 0) report.winningDecisionsAvailable += 1;
       if (v2 && !rulesFacts) {
         report.rulesChecks += 1;
         try { rulesFacts = await rulesTools!.compute({ hand: observation.hand, wildRank: state.wildRank, visibleDiscard: state.topDiscard }, Math.min(1000, remainingMs)); }
@@ -178,6 +184,7 @@ export async function qualifyAiModel(options: {
           protocolId, matchId: state.gameId, gameRevision: state.revision,
           ...(rulesFacts ? { toolsVersion: rulesFacts.toolVersion,
             declarationAvailable: rulesFacts.status === "complete" ? !!rulesFacts.immediateDeclaration : null } : {}),
+          ...(validationOnly ? { toolsVersion: AI_VALIDATION_TOOL_VERSION, declarationAvailable: null } : {}),
           ...(options.serverRevision ? { serverRevision: options.serverRevision.slice(0, 100) } : {})
         });
       } catch { record("ledger-unavailable"); report.status = "failed"; break; }
@@ -205,7 +212,7 @@ export async function qualifyAiModel(options: {
         report.maxLatencyMs = Math.max(report.maxLatencyMs, Date.now() - started);
         const known = error instanceof OpenRouterAgentError ? error : null;
         const code = known?.code ?? "qualification-unavailable";
-        const policyRejected = code === "missed-declaration" || code === "invalid-declaration";
+        const policyRejected = code === "missed-declaration" || code === "invalid-declaration" || !!known?.metadata.validation;
         record(code);
         if (policyRejected) report.policyRejected += 1; else report.providerErrors += 1;
         if (policyRejected || code === "invalid-json" || code === "invalid-decision" || code === "invalid-card-reference") report.invalidActions += 1;
@@ -224,7 +231,9 @@ export async function qualifyAiModel(options: {
           outcome: code === "cancelled" ? "cancelled" : policyRejected ? "policy-rejected" : "provider-failed"
         }); }
         catch { record("ledger-unavailable"); report.status = "failed"; }
-        feedback = `Your previous request failed with ${code}. Return a valid action for the same observed turn.`;
+        feedback = validationOnly && known?.metadata.validation
+          ? `Your proposed move was rejected: ${known.metadata.validation.message} Return a corrected legal decision.`
+          : `Your previous request failed with ${code}. Return a valid action for the same observed turn.`;
         if (code === "model-mismatch" || code === "configuration" || code === "invalid-observation" || code === "invalid-rules-facts") report.status = "failed";
         continue;
       } finally {
@@ -238,9 +247,18 @@ export async function qualifyAiModel(options: {
       };
       if (result.modelId !== identity.modelId) { await settle(false, "provider-failed"); record("model-mismatch"); report.status = "failed"; break; }
       if (Date.now() >= state.turnEndsAt) { await settle(false, "stale"); record("turn-deadline"); report.status = "failed"; break; }
-      const mustDeclare = scenario === "winning-hand" || (v2 && rulesFacts?.status === "complete" && !!rulesFacts.immediateDeclaration);
+      if (validationOnly) {
+        const validation = validateAiProposal(observation, result.decision);
+        if (!validation.valid) {
+          record(validation.validation.code); report.invalidActions += 1; report.policyRejected += 1;
+          if (!(await settle(false, "policy-rejected"))) break;
+          feedback = `Your proposed move was rejected: ${validation.validation.message} Return a corrected legal decision.`;
+          continue;
+        }
+      }
+      const mustDeclare = (!validationOnly && scenario === "winning-hand") || (v2 && rulesFacts?.status === "complete" && !!rulesFacts.immediateDeclaration);
       const missedWin = mustDeclare && result.decision.action !== "declare";
-      const invalidPlan = (v2 || scenario === "winning-hand") && result.decision.action === "declare"
+      const invalidPlan = !validationOnly && (v2 || scenario === "winning-hand") && result.decision.action === "declare"
         && !validateDeclaration(observation.hand, result.decision.cardId ?? "", result.decision.groups, state.wildRank).valid;
       if (missedWin || invalidPlan) {
         const code = missedWin ? "missed-declaration" : "invalid-declaration";
@@ -265,6 +283,7 @@ export async function qualifyAiModel(options: {
         continue;
       }
       if (!(await settle(true, "accepted"))) break;
+      if (validationOnly && scenario === "winning-hand" && result.decision.action === "discard") report.winningDecisionsMissed += 1;
       if (result.decision.action === "declare") report.declarations += 1;
       if (applied.dropped) {
         // The model chose a committed declaration and lost under ordinary rules.
