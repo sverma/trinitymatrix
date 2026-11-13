@@ -70,6 +70,13 @@ and refuses new games. Availability is refreshed from the model catalog every
 five minutes. Only structured-output models within the configured price caps
 are admitted, and there is no fallback to another model.
 
+Requests prefer the lowest-latency eligible endpoint for the selected model.
+The initial configuration sets DeepSeek's optional reasoning effort to low,
+limits Qwen reasoning to 256 tokens, and disables Mistral's optional extended
+reasoning. All retain the same 1,200-token total output ceiling. These settings
+avoid provider defaults consuming the turn deadline before returning a move;
+they do not change model identity or substitute another decision engine.
+
 After provisioning the new server, an operator can verify each model without
 creating ranked games using the container's `dist/ops/ai-check.js` entry point.
 These are real, paid requests, charged against the same shared budget ledger.

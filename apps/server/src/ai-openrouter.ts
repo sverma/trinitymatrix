@@ -94,6 +94,14 @@ const decisionJsonSchema = {
   additionalProperties: false
 };
 
+/** Keep reasoning inside the shared output/turn budget without changing models. */
+function modelReasoningOptions(modelId: string) {
+  if (modelId === "deepseek/deepseek-v4.1-flash-1017") return { effort: "low", exclude: true };
+  if (modelId === "mistralai/mistral-large-4-0") return { enabled: false, exclude: true };
+  if (modelId === "qwen/qwen3.8-flash") return { max_tokens: 256, exclude: true };
+  return undefined;
+}
+
 function nonnegativeNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
@@ -180,6 +188,7 @@ export class OpenRouterAgentClient {
       throw new OpenRouterAgentError("invalid-observation");
     }
     const observation = parsed.data;
+    const reasoning = modelReasoningOptions(input.modelId);
     const body = JSON.stringify({
       model: input.modelId,
       messages: [
@@ -188,9 +197,11 @@ export class OpenRouterAgentClient {
       ],
       response_format: { type: "json_schema", json_schema: { name: "trinity_move", strict: true, schema: decisionJsonSchema } },
       max_tokens: AI_MAX_OUTPUT_TOKENS,
+      ...(reasoning ? { reasoning } : {}),
       stream: false,
       provider: {
         require_parameters: true,
+        sort: "latency",
         data_collection: "deny",
         max_price: { prompt: 1, completion: 5, request: 0 }
       }

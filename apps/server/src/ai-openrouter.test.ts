@@ -84,7 +84,7 @@ describe("model-bound OpenRouter player", () => {
     expect(body).not.toHaveProperty("models");
     expect(body).not.toHaveProperty("route");
     expect(body.max_tokens).toBe(AI_MAX_OUTPUT_TOKENS);
-    expect(body.provider).toEqual({ require_parameters: true, data_collection: "deny", max_price: { prompt: 1, completion: 5, request: 0 } });
+    expect(body.provider).toEqual({ require_parameters: true, sort: "latency", data_collection: "deny", max_price: { prompt: 1, completion: 5, request: 0 } });
     expect(body.response_format.json_schema.strict).toBe(true);
     expect(body.response_format.json_schema.schema.additionalProperties).toBe(false);
     expect(body.messages[0].content).toContain("NO printed joker and NO selected wild-rank card");
@@ -94,6 +94,30 @@ describe("model-bound OpenRouter player", () => {
     expect(JSON.parse(body.messages[1].content).observation.hand).toHaveLength(13);
     expect(body.messages[1].content).not.toContain(apiKey);
     expect(AI_REQUEST_RESERVATION_USD).toBeGreaterThanOrEqual(AI_MAX_REQUEST_BYTES / 1_000_000 + AI_MAX_OUTPUT_TOKENS * 5 / 1_000_000);
+  });
+
+  it.each([
+    { id: "deepseek/deepseek-v4.1-flash-1017", reasoning: { effort: "low", exclude: true } },
+    { id: "mistralai/mistral-large-4-0", reasoning: { enabled: false, exclude: true } },
+    { id: "qwen/qwen3.8-flash", reasoning: { max_tokens: 256, exclude: true } },
+    { id: "anthropic/claude-haiku-5.5", reasoning: undefined },
+    { id: "google/gemini-3.8-flash", reasoning: undefined },
+    { id: "deepseek/other-model", reasoning: undefined },
+    { id: "mistralai/other-model", reasoning: undefined },
+    { id: "qwen/other-model", reasoning: undefined }
+  ])("scopes inference settings to the exact binding $id without increasing output or price bounds", async ({ id, reasoning }) => {
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision(), { model: id })));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await client.decide({ modelId: id, observation: observation(), memory: "" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+    expect(body.model).toBe(id);
+    expect(body).not.toHaveProperty("models");
+    if (reasoning) expect(body.reasoning).toEqual(reasoning);
+    else expect(body).not.toHaveProperty("reasoning");
+    expect(body.max_tokens).toBe(AI_MAX_OUTPUT_TOKENS);
+    expect(body.provider).toEqual({ require_parameters: true, sort: "latency", data_collection: "deny", max_price: { prompt: 1, completion: 5, request: 0 } });
+    expect(Buffer.byteLength(String(fetcher.mock.calls[0]![1]?.body))).toBeLessThanOrEqual(AI_MAX_REQUEST_BYTES);
   });
 
   it("rejects accidental server snapshot fields before sending anything", async () => {
