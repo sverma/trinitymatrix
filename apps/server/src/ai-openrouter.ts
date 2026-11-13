@@ -48,11 +48,17 @@ export type AiAgentObservation = {
 export type AiAgentDecisionResult = {
   decision: AiAgentDecision;
   modelId: string;
-  usage: {
-    costUsd: number | null;
-    promptTokens: number | null;
-    completionTokens: number | null;
-  };
+  usage: AiAgentUsage;
+};
+export type AiAgentUsage = {
+  costUsd: number | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+};
+export type OpenRouterAgentErrorMetadata = {
+  status?: number;
+  finishReason?: string;
+  usage?: AiAgentUsage;
 };
 
 export type OpenRouterAgentErrorCode =
@@ -64,11 +70,17 @@ export type OpenRouterAgentErrorCode =
   | "provider-unavailable"
   | "response-too-large"
   | "invalid-response"
+  | "truncated-response"
+  | "refused-response"
+  | "invalid-json"
+  | "invalid-decision"
+  | "invalid-card-reference"
+  | "http-error"
   | "model-mismatch";
 
 /** Intentionally excludes provider bodies, prompts, credentials and raw causes. */
 export class OpenRouterAgentError extends Error {
-  constructor(readonly code: OpenRouterAgentErrorCode) {
+  constructor(readonly code: OpenRouterAgentErrorCode, readonly metadata: OpenRouterAgentErrorMetadata = {}) {
     super(`AI decision unavailable (${code}).`);
     this.name = "OpenRouterAgentError";
   }
@@ -82,17 +94,35 @@ ACTIONS: With 13 cards during your own turn in phase playing, choose draw-stock 
 
 Return only the requested JSON. memory must be a brief factual note or future strategy summary, at most 4000 characters; do not provide private chain-of-thought. It may be persisted between matches. Game facts from earlier matches are not facts about the current hand. You choose the action; the server checks legality and will not secretly replace your strategy with a different model or a solver.`;
 
-const decisionJsonSchema = {
-  type: "object",
-  properties: {
-    action: { type: "string", enum: actionSchema.options },
-    cardId: { type: ["string", "null"], description: "Exact owned card ID for discard/declare; null for other actions." },
-    groups: { type: "array", items: { type: "array", items: { type: "string" } } },
-    memory: { type: "string", description: "Concise persistent factual memory or strategy summary, max 4000 characters." }
-  },
-  required: ["action", "cardId", "groups", "memory"],
-  additionalProperties: false
-};
+function allowedActions(observation: AiAgentObservation): AiAgentDecision["action"][] {
+  if (observation.state.phase === "showdown") {
+    return observation.state.showdown?.pendingPlayerIds.includes(observation.playerId) ? ["submit-hand"] : [];
+  }
+  if (observation.state.phase !== "playing" || observation.state.currentPlayerId !== observation.playerId
+    || observation.state.players.find(({ id }) => id === observation.playerId)?.status !== "playing") return [];
+  if (observation.hand.length === 13) return observation.state.topDiscard ? ["draw-stock", "draw-discard"] : ["draw-stock"];
+  return observation.hand.length === 14 ? ["discard", "declare"] : [];
+}
+
+function decisionJsonSchema(observation: AiAgentObservation) {
+  const actions = allowedActions(observation);
+  const cardRequired = actions.includes("discard");
+  const cardIds = observation.hand.map(({ id }) => id);
+  return {
+    type: "object",
+    properties: {
+      action: { type: "string", enum: actions },
+      cardId: cardRequired
+        ? { type: "string", enum: cardIds, description: "Choose the exact owned card ID to discard." }
+        : { type: "null", description: "No card is discarded by this action." },
+      groups: { type: "array", maxItems: 14, items: { type: "array", minItems: 1, maxItems: 14,
+        items: { type: "string", enum: cardIds } } },
+      memory: { type: "string", description: "Concise persistent factual memory or strategy summary, max 4000 characters." }
+    },
+    required: ["action", "cardId", "groups", "memory"],
+    additionalProperties: false
+  };
+}
 
 /** Keep reasoning inside the shared output/turn budget without changing models. */
 function modelReasoningOptions(modelId: string) {
@@ -138,26 +168,45 @@ async function boundedBody(response: Response): Promise<string> {
   return Buffer.concat(chunks, total).toString("utf8");
 }
 
-function validateOwnedCards(decision: AiAgentDecision, observation: AiAgentObservation): void {
+function validateOwnedCards(decision: AiAgentDecision, observation: AiAgentObservation, metadata: OpenRouterAgentErrorMetadata): AiAgentDecision {
   const hand = new Set(observation.hand.map(({ id }) => id));
   const grouped = decision.groups.flat();
   if (new Set(grouped).size !== grouped.length || grouped.some((id) => !hand.has(id))
     || (decision.cardId !== null && !hand.has(decision.cardId))) {
-    throw new OpenRouterAgentError("invalid-response");
+    throw new OpenRouterAgentError("invalid-card-reference", metadata);
   }
+  if (!allowedActions(observation).includes(decision.action)) throw new OpenRouterAgentError("invalid-decision", metadata);
   if (decision.action === "draw-stock" || decision.action === "draw-discard") {
-    if (decision.cardId !== null || decision.groups.length !== 0) throw new OpenRouterAgentError("invalid-response");
+    if (decision.cardId !== null) throw new OpenRouterAgentError("invalid-decision", metadata);
   } else if (decision.action === "discard") {
-    if (decision.cardId === null || decision.groups.length !== 0) throw new OpenRouterAgentError("invalid-response");
+    if (decision.cardId === null) throw new OpenRouterAgentError("invalid-decision", metadata);
   } else if (decision.action === "declare") {
     if (decision.cardId === null || decision.groups.length === 0 || grouped.includes(decision.cardId)) {
-      throw new OpenRouterAgentError("invalid-response");
+      throw new OpenRouterAgentError("invalid-decision", metadata);
     }
     // Meld correctness deliberately belongs to the authoritative game validator.
     // An invalid model-chosen declaration has the same outcome as a human one.
   } else if (decision.cardId !== null || grouped.length !== observation.hand.length) {
-    throw new OpenRouterAgentError("invalid-response");
+    throw new OpenRouterAgentError("invalid-decision", metadata);
   }
+  // Layouts accompanying an ordinary draw/discard have no effect on the move.
+  // Normalize that harmless extra output without changing the model's card choice.
+  return decision.action === "declare" || decision.action === "submit-hand" ? decision : { ...decision, groups: [] };
+}
+
+function responseUsage(value: unknown): AiAgentUsage | undefined {
+  if (!value || typeof value !== "object" || !("usage" in value)) return undefined;
+  const usage = value.usage;
+  if (!usage || typeof usage !== "object") return undefined;
+  return {
+    costUsd: nonnegativeNumber("cost" in usage ? usage.cost : undefined),
+    promptTokens: tokenCount("prompt_tokens" in usage ? usage.prompt_tokens : undefined),
+    completionTokens: tokenCount("completion_tokens" in usage ? usage.completion_tokens : undefined)
+  };
+}
+
+function safeFinishReason(value: string | null): string {
+  return value && ["stop", "length", "content_filter", "tool_calls", "function_call", "error"].includes(value) ? value : "unknown";
 }
 
 export class OpenRouterAgentClient {
@@ -176,7 +225,10 @@ export class OpenRouterAgentClient {
     this.timeoutMs = options.timeoutMs ?? 15_000;
   }
 
-  async decide(input: { modelId: string; observation: AiAgentObservation; memory: string }): Promise<AiAgentDecisionResult> {
+  async decide(input: { modelId: string; observation: AiAgentObservation; memory: string; timeoutMs?: number }): Promise<AiAgentDecisionResult> {
+    if (input.timeoutMs !== undefined && (!Number.isInteger(input.timeoutMs) || input.timeoutMs < 1 || input.timeoutMs > 15_000)) {
+      throw new OpenRouterAgentError("configuration");
+    }
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*\/[a-zA-Z0-9][a-zA-Z0-9._:-]{0,179}$/.test(input.modelId)
       || input.modelId.startsWith("openrouter/") || input.modelId.endsWith(":nitro") || input.modelId.endsWith(":floor")) {
       throw new OpenRouterAgentError("configuration");
@@ -188,6 +240,8 @@ export class OpenRouterAgentClient {
       throw new OpenRouterAgentError("invalid-observation");
     }
     const observation = parsed.data;
+    if (allowedActions(observation).length === 0) throw new OpenRouterAgentError("invalid-observation");
+    const timeoutMs = Math.min(input.timeoutMs ?? this.timeoutMs, this.timeoutMs);
     const reasoning = modelReasoningOptions(input.modelId);
     const body = JSON.stringify({
       model: input.modelId,
@@ -195,7 +249,7 @@ export class OpenRouterAgentClient {
         { role: "system", content: systemPrompt },
         { role: "user", content: JSON.stringify({ observation, memory: input.memory }) }
       ],
-      response_format: { type: "json_schema", json_schema: { name: "trinity_move", strict: true, schema: decisionJsonSchema } },
+      response_format: { type: "json_schema", json_schema: { name: "trinity_move", strict: true, schema: decisionJsonSchema(observation) } },
       max_tokens: AI_MAX_OUTPUT_TOKENS,
       ...(reasoning ? { reasoning } : {}),
       stream: false,
@@ -215,7 +269,7 @@ export class OpenRouterAgentClient {
     const timer = setTimeout(() => {
       controller.abort();
       rejectTimeout?.(new OpenRouterAgentError("timeout"));
-    }, this.timeoutMs);
+    }, timeoutMs);
     try {
       return await Promise.race([this.request(body, input.modelId, observation, controller.signal), timeout]);
     } catch (error) {
@@ -251,36 +305,45 @@ export class OpenRouterAgentClient {
     });
     if (!response.ok) {
       await response.body?.cancel();
-      throw new OpenRouterAgentError("provider-unavailable");
+      throw new OpenRouterAgentError("http-error", { status: response.status });
     }
-    const text = await boundedBody(response);
+    let text: string;
+    try { text = await boundedBody(response); }
+    catch (error) {
+      if (error instanceof OpenRouterAgentError) throw new OpenRouterAgentError(error.code, { status: response.status });
+      throw error;
+    }
     let result: unknown;
-    try { result = JSON.parse(text); } catch { throw new OpenRouterAgentError("invalid-response"); }
+    try { result = JSON.parse(text); } catch { throw new OpenRouterAgentError("invalid-json", { status: response.status }); }
+    const usage = responseUsage(result);
+    const metadata: OpenRouterAgentErrorMetadata = { status: response.status, ...(usage ? { usage } : {}) };
     const envelope = z.object({
       model: z.string(),
       choices: z.array(z.object({
         finish_reason: z.string().nullable(),
-        message: z.object({ content: z.string(), refusal: z.string().nullable().optional() })
+        message: z.object({ content: z.unknown().optional(), refusal: z.unknown().optional() })
       })).length(1),
       usage: z.object({ cost: z.unknown().optional(), prompt_tokens: z.unknown().optional(), completion_tokens: z.unknown().optional() }).optional()
     }).safeParse(result);
-    if (!envelope.success) throw new OpenRouterAgentError("invalid-response");
-    if (envelope.data.model !== modelId) throw new OpenRouterAgentError("model-mismatch");
+    if (!envelope.success) throw new OpenRouterAgentError("invalid-response", metadata);
+    if (envelope.data.model !== modelId) throw new OpenRouterAgentError("model-mismatch", metadata);
     const choice = envelope.data.choices[0]!;
-    if (choice.finish_reason !== "stop" || choice.message.refusal) throw new OpenRouterAgentError("invalid-response");
+    metadata.finishReason = safeFinishReason(choice.finish_reason);
+    if (choice.finish_reason === "length") throw new OpenRouterAgentError("truncated-response", metadata);
+    if (choice.finish_reason === "content_filter" || (typeof choice.message.refusal === "string" && choice.message.refusal.length > 0)) {
+      throw new OpenRouterAgentError("refused-response", metadata);
+    }
+    if (choice.finish_reason !== "stop") throw new OpenRouterAgentError("invalid-response", metadata);
+    if (typeof choice.message.content !== "string") throw new OpenRouterAgentError("invalid-json", metadata);
     let content: unknown;
-    try { content = JSON.parse(choice.message.content); } catch { throw new OpenRouterAgentError("invalid-response"); }
+    try { content = JSON.parse(choice.message.content); } catch { throw new OpenRouterAgentError("invalid-json", metadata); }
     const decision = decisionSchema.safeParse(content);
-    if (!decision.success) throw new OpenRouterAgentError("invalid-response");
-    validateOwnedCards(decision.data, observation);
+    if (!decision.success) throw new OpenRouterAgentError("invalid-decision", metadata);
+    const normalizedDecision = validateOwnedCards(decision.data, observation, metadata);
     return {
-      decision: decision.data,
+      decision: normalizedDecision,
       modelId,
-      usage: {
-        costUsd: nonnegativeNumber(envelope.data.usage?.cost),
-        promptTokens: tokenCount(envelope.data.usage?.prompt_tokens),
-        completionTokens: tokenCount(envelope.data.usage?.completion_tokens)
-      }
+      usage: usage ?? { costUsd: null, promptTokens: null, completionTokens: null }
     };
   }
 }

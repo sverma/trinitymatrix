@@ -4,6 +4,17 @@ import { PostgresGameArchive } from "./game-archive";
 import { RankingGame } from "./game";
 
 describe("PostgresGameArchive", () => {
+  it("stores an AI technical forfeit beside the ordinary drop command without changing game rules", async () => {
+    const repository = { appendGameEvents: vi.fn(async () => []) } as unknown as ApplicationRepository;
+    const archive = new PostgresGameArchive(repository);
+    const game = new RankingGame([{ id: "human-1", displayName: "Asha" }, { id: "ai-1", displayName: "Model One", actorKind: "ai", aiModelId: "provider/model-one" }], () => 0);
+    const command = { type: "game.drop" as const, gameId: game.id, commandId: "00000000-0000-4000-8000-000000000001", expectedRevision: game.publicState().revision };
+    game.apply("ai-1", command);
+    const aiFailure = { code: "AI_UNAVAILABLE" as const, message: "The selected model could not complete this game." };
+    await archive.recordEvent({ game: game.snapshot(), eventType: "game.drop", actorPlayerId: "ai-1", commandId: command.commandId, command, aiFailure, occurredAt: new Date() });
+    expect(repository.appendGameEvents).toHaveBeenCalledWith(expect.objectContaining({ events: [expect.objectContaining({ payload: { command, aiFailure, state: game.snapshot() } })] }));
+    expect(command).not.toHaveProperty("aiFailure");
+  });
   it("creates a match and records a complete initial replay snapshot", async () => {
     const game = new RankingGame([
       { id: "00000000-0000-4000-8000-000000000001", displayName: "Ayaan" },

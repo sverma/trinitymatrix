@@ -74,6 +74,7 @@ function PlayerApp() {
       playerId={socket.playerId}
       notice={socket.notice}
       winner={socket.winner}
+      aiForfeits={socket.aiForfeits}
       onDraw={socket.draw}
       onDiscard={socket.discard}
       onDeclare={socket.declare}

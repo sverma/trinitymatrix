@@ -76,6 +76,13 @@ export type RankingEntry = {
 
 export type RankingComposition = "human" | "ai" | "mixed";
 
+export type AiPlayerForfeit = {
+  playerId: string;
+  playerName: string;
+  reasonCode: "AI_UNAVAILABLE" | "AI_INVALID_ACTION" | "AI_BUDGET_EXHAUSTED";
+  reason: string;
+};
+
 export type AiPlayer = {
   id: string;
   displayName: string;

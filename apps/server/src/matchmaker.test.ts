@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import { RankingGame } from "./game";
-import { Matchmaker, type GameArchive } from "./matchmaker";
+import { Matchmaker, type ArchivedGameEvent, type GameArchive } from "./matchmaker";
 import { MemoryStateStore } from "./persistence";
 
 class FakeSocket {
@@ -93,6 +93,45 @@ describe("Matchmaker restart recovery", () => {
   afterEach(() => {
     active.splice(0).forEach((matchmaker) => matchmaker.shutdown());
     vi.useRealTimers();
+  });
+
+  it("broadcasts and archives a server-authored AI technical forfeit only after the drop is accepted", async () => {
+    const archive = { startPrivateGame: vi.fn(async () => undefined), recordEvent: vi.fn(async (_event: ArchivedGameEvent) => undefined), completeGame: vi.fn(async () => undefined) } satisfies GameArchive;
+    const matchmaker = new Matchmaker(new MemoryStateStore(), vi.fn(), archive);
+    active.push(matchmaker);
+    const human = new FakeSocket();
+    const ai = new FakeSocket();
+    matchmaker.register({ playerId: "human-1", displayName: "Asha", socket: human });
+    matchmaker.register({ playerId: "ai-1", displayName: "Model One", actorKind: "ai", aiModelId: "provider/model-one", socket: ai });
+    const gameId = matchmaker.startSelectedMatch(["human-1", "ai-1"]);
+    const revision = matchmaker.agentView("ai-1")!.state.revision;
+    const notice = { code: "AI_BUDGET_EXHAUSTED" as const, message: "The shared daily AI budget was reached." };
+    const command = { type: "game.drop" as const, commandId: "00000000-0000-4000-8000-000000000001", gameId, expectedRevision: revision - 1 };
+    expect(matchmaker.executeAgentCommand("ai-1", command, notice)?.accepted).toBe(false);
+    expect(messages(human).some((message) => message.type === "game.player-dropped")).toBe(false);
+    expect(matchmaker.executeAgentCommand("ai-1", { ...command, commandId: "00000000-0000-4000-8000-000000000002", expectedRevision: revision }, notice)?.accepted).toBe(true);
+    await matchmaker.flush();
+    expect(messages(human)).toContainEqual({ type: "game.player-dropped", playerId: "ai-1", playerName: "Model One", reasonCode: notice.code, reason: notice.message });
+    expect(archive.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: "game.drop", aiFailure: notice }));
+    expect(archive.completeGame).toHaveBeenCalledWith(expect.objectContaining({ winnerId: "human-1", reason: "player-dropped" }));
+  });
+
+  it("keeps a human voluntary drop distinct from an AI technical forfeit", async () => {
+    const archive = { startPrivateGame: vi.fn(async () => undefined), recordEvent: vi.fn(async (_event: ArchivedGameEvent) => undefined), completeGame: vi.fn(async () => undefined) } satisfies GameArchive;
+    const matchmaker = new Matchmaker(new MemoryStateStore(), vi.fn(), archive);
+    active.push(matchmaker);
+    const first = new FakeSocket();
+    const second = new FakeSocket();
+    matchmaker.register({ playerId: "human-1", displayName: "Asha", socket: first });
+    matchmaker.register({ playerId: "human-2", displayName: "Kabir", socket: second });
+    const gameId = matchmaker.startSelectedMatch(["human-1", "human-2"]);
+    const command = { type: "game.drop" as const, commandId: "00000000-0000-4000-8000-000000000001", gameId, expectedRevision: matchmaker.agentView("human-1")!.state.revision };
+    expect(() => matchmaker.executeAgentCommand("human-1", command, { code: "AI_UNAVAILABLE", message: "Provider unavailable." })).toThrow("AI connection");
+    matchmaker.handle("human-1", command);
+    await matchmaker.flush();
+    expect(messages(second)).toContainEqual({ type: "game.player-dropped", playerId: "human-1", playerName: "Asha" });
+    const event = archive.recordEvent.mock.calls.find(([entry]) => entry.eventType === "game.drop")?.[0];
+    expect(event).not.toHaveProperty("aiFailure");
   });
 
   it("terminates the older socket when the same player opens a newer window", () => {

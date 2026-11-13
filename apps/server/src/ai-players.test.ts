@@ -4,6 +4,7 @@ import type { ServerMessage } from "@trinitymatrix/protocol";
 import { AiPlayers } from "./ai-players";
 import type { AiIdentity, AiStore } from "./ai-repository";
 import type { AiAgentDecision, AiAgentDecisionResult } from "./ai-openrouter";
+import { OpenRouterAgentError } from "./ai-openrouter";
 import { RankingGame } from "./game";
 import { Matchmaker, type GameplaySocket } from "./matchmaker";
 import { MemoryStateStore } from "./persistence";
@@ -72,7 +73,7 @@ describe("persistent model players", () => {
     vi.useRealTimers();
   });
 
-  async function fixture(options: { botTurn?: boolean; drawn?: boolean; showdown?: boolean; model?: ReturnType<typeof client> } = {}) {
+  async function fixture(options: { botTurn?: boolean; drawn?: boolean; showdown?: boolean; deadlineMs?: number; model?: ReturnType<typeof client> } = {}) {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-11-13T10:00:00Z"));
     const stateStore = new MemoryStateStore();
@@ -90,7 +91,7 @@ describe("persistent model players", () => {
     }));
     snapshot.stock = snapshot.stock.map((card, index) => ({ ...card, id: `stock-secret-${index}` }));
     snapshot.revision = 2;
-    snapshot.turnEndsAt = Date.now() + 45_000;
+    snapshot.turnEndsAt = Date.now() + (options.deadlineMs ?? 45_000);
     if (options.drawn) {
       const drawn = { ...snapshot.stock.pop()!, id: "ai-drawn-card" };
       snapshot.hands.find(({ playerId }) => playerId === aiId)!.cards.push(drawn);
@@ -111,10 +112,11 @@ describe("persistent model players", () => {
     await matchmaker.restore();
     const humanSocket = new HumanSocket();
     matchmaker.register({ playerId: humanId, displayName: realHumanName, socket: humanSocket });
-    const runtime = new AiPlayers(matchmaker, store, model, 10, vi.fn(), { availableModels: [modelId], actionDelayMs: 1 });
+    const report = vi.fn();
+    const runtime = new AiPlayers(matchmaker, store, model, 10, report, { availableModels: [modelId], actionDelayMs: 1 });
     runtimes.push(runtime);
     await runtime.start();
-    return { runtime, matchmaker, model, store, stateStore, snapshot, humanSocket };
+    return { runtime, matchmaker, model, store, stateStore, snapshot, humanSocket, report };
   }
 
   it("sends only the AI's hand and public observations, with human names pseudonymized", async () => {
@@ -294,14 +296,18 @@ describe("persistent model players", () => {
     expect(humanSocket.messages).toContainEqual(expect.objectContaining({ type: "game.ended", winnerId: humanId, reason: "invalid-declaration" }));
   });
 
-  it("limits invalid commands to two model attempts before forfeiting", async () => {
+  it("pauses after two invalid commands and applies the normal turn timeout without surrendering", async () => {
     const model = client();
     model.decide.mockImplementation(async (input) => chosenDecision(input, { action: "discard", cardId: input.observation.hand[0]!.id }));
-    const { humanSocket } = await fixture({ model });
+    const { humanSocket, matchmaker } = await fixture({ model });
     await vi.advanceTimersByTimeAsync(100);
     expect(model.decide).toHaveBeenCalledTimes(2);
     expect(model.decide.mock.calls[1]![0].observation.publicHistory?.at(-1)).toContain("Draw before discarding");
-    expect(humanSocket.messages).toContainEqual(expect.objectContaining({ type: "game.ended", winnerId: humanId, reason: "player-dropped" }));
+    expect(humanSocket.messages.some(({ type }) => type === "game.ended")).toBe(false);
+    expect(matchmaker.agentView(aiId)?.state.phase).toBe("playing");
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(model.decide).toHaveBeenCalledTimes(2);
+    expect(matchmaker.agentView(aiId)?.state.currentPlayerId).toBe(humanId);
   });
 
   it("retains unknown failed-request cost and never falls back to another model", async () => {
@@ -309,10 +315,10 @@ describe("persistent model players", () => {
     model.decide.mockRejectedValue(new Error("provider failed"));
     const { store, humanSocket } = await fixture({ model });
     await vi.advanceTimersByTimeAsync(100);
-    expect(model.decide).toHaveBeenCalledTimes(1);
-    expect(model.decide.mock.calls[0]![0].modelId).toBe(modelId);
+    expect(model.decide).toHaveBeenCalledTimes(2);
+    expect(model.decide.mock.calls.every(([input]) => input.modelId === modelId)).toBe(true);
     expect(store.finishRequest).toHaveBeenCalledWith(expect.any(String), null, false);
-    expect(humanSocket.messages).toContainEqual(expect.objectContaining({ type: "game.ended", winnerId: humanId }));
+    expect(humanSocket.messages.some(({ type }) => type === "game.ended")).toBe(false);
   });
 
   it("does not contact a model when the shared daily reservation cannot be obtained", async () => {
@@ -329,9 +335,103 @@ describe("persistent model players", () => {
     model.decide.mockRejectedValue(new Error("provider failed"));
     const { matchmaker, store } = await fixture({ showdown: true, model });
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(model.decide).toHaveBeenCalledTimes(1);
-    expect(store.reserveRequest).toHaveBeenCalledTimes(1);
+    expect(model.decide).toHaveBeenCalledTimes(2);
+    expect(store.reserveRequest).toHaveBeenCalledTimes(2);
     expect(matchmaker.agentView(aiId)?.state.phase).toBe("showdown");
+  });
+
+  it("recovers from a malformed discard with the same model and records known billed usage", async () => {
+    const model = client();
+    model.decide.mockRejectedValueOnce(new OpenRouterAgentError("invalid-decision", {
+      usage: { costUsd: 0.002, promptTokens: 1000, completionTokens: 200 }
+    }));
+    const { matchmaker, humanSocket, store, report } = await fixture({ drawn: true, model });
+    await vi.advanceTimersByTimeAsync(2);
+    expect(model.decide).toHaveBeenCalledTimes(2);
+    expect(model.decide.mock.calls.every(([input]) => input.modelId === modelId && input.observation.hand.length === 14)).toBe(true);
+    expect(model.decide.mock.calls[1]![0].observation.publicHistory?.at(-1)).toContain("invalid-decision");
+    expect(matchmaker.agentView(aiId)?.state.currentPlayerId).toBe(humanId);
+    expect(store.finishRequest).toHaveBeenCalledWith(expect.any(String), 0.002, false);
+    expect(report).toHaveBeenCalledWith("model-request-failed", aiId, expect.objectContaining({ errorCode: "invalid-decision", handCount: 14, modelId }));
+    expect(humanSocket.messages.some(({ type }) => type === "game.ended")).toBe(false);
+  });
+
+  it.each([401, 402, 403])("does not repeatedly bill retries when the provider denies access with HTTP %s", async (status) => {
+    const model = client();
+    model.decide.mockRejectedValue(new OpenRouterAgentError("http-error", { status }));
+    const { matchmaker, humanSocket } = await fixture({ model });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(model.decide).toHaveBeenCalledTimes(1);
+    expect(matchmaker.agentView(aiId)).toBeNull();
+    expect(humanSocket.messages).toContainEqual(expect.objectContaining({ type: "game.player-dropped", reasonCode: "AI_UNAVAILABLE", reason: expect.stringContaining("provider denied access") }));
+  });
+
+  it("shrinks the retry timeout to the remaining normal turn deadline", async () => {
+    const model = client();
+    model.decide.mockImplementationOnce(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 15_000));
+      throw new OpenRouterAgentError("timeout");
+    });
+    const { matchmaker } = await fixture({ drawn: true, deadlineMs: 18_000, model });
+    await vi.advanceTimersByTimeAsync(15_002);
+    expect(model.decide).toHaveBeenCalledTimes(2);
+    expect(model.decide.mock.calls[0]![0].timeoutMs).toBe(15_000);
+    expect(model.decide.mock.calls[1]![0].timeoutMs).toBeGreaterThan(1_000);
+    expect(model.decide.mock.calls[1]![0].timeoutMs).toBeLessThanOrEqual(2_000);
+    expect(matchmaker.agentView(aiId)?.state.currentPlayerId).toBe(humanId);
+  });
+
+  it("does not reserve or dispatch another request when the turn deadline is too close", async () => {
+    const { matchmaker, model, store } = await fixture({ drawn: true, deadlineMs: 1_500 });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(model.decide).not.toHaveBeenCalled();
+    expect(store.reserveRequest).not.toHaveBeenCalled();
+    expect(matchmaker.agentView(aiId)?.hand).toHaveLength(14);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(matchmaker.agentView(aiId)?.hand).toHaveLength(13);
+    expect(matchmaker.agentView(aiId)?.state.currentPlayerId).toBe(humanId);
+  });
+
+  it("forfeits with a technical reason only after three consecutive failed AI turns", async () => {
+    const model = client();
+    model.decide.mockRejectedValue(new OpenRouterAgentError("timeout"));
+    const { matchmaker, humanSocket } = await fixture({ model });
+    for (let turn = 0; turn < 3; turn++) {
+      await vi.advanceTimersByTimeAsync(3);
+      expect(model.decide).toHaveBeenCalledTimes((turn + 1) * 2);
+      if (turn === 2) break;
+      expect(humanSocket.messages.some(({ type }) => type === "game.ended")).toBe(false);
+      await vi.advanceTimersByTimeAsync(45_000);
+      let view = matchmaker.agentView(humanId)!;
+      matchmaker.handle(humanId, { type: "game.draw", source: "stock", commandId: randomUUID(), gameId: view.state.gameId, expectedRevision: view.state.revision });
+      view = matchmaker.agentView(humanId)!;
+      matchmaker.handle(humanId, { type: "game.discard", cardId: view.hand.at(-1)!.id, commandId: randomUUID(), gameId: view.state.gameId, expectedRevision: view.state.revision });
+    }
+    expect(humanSocket.messages).toContainEqual(expect.objectContaining({ type: "game.player-dropped", reasonCode: "AI_UNAVAILABLE", reason: expect.stringContaining("three consecutive turns") }));
+    expect(humanSocket.messages).toContainEqual(expect.objectContaining({ type: "game.ended", winnerId: humanId }));
+  });
+
+  it("clears the consecutive-failure count after a complete successful model turn", async () => {
+    const model = client();
+    model.decide.mockRejectedValueOnce(new OpenRouterAgentError("timeout")).mockRejectedValueOnce(new OpenRouterAgentError("timeout"));
+    const { matchmaker, humanSocket } = await fixture({ model });
+    await vi.advanceTimersByTimeAsync(45_000);
+    const playHumanTurn = () => {
+      let view = matchmaker.agentView(humanId)!;
+      matchmaker.handle(humanId, { type: "game.draw", source: "stock", commandId: randomUUID(), gameId: view.state.gameId, expectedRevision: view.state.revision });
+      view = matchmaker.agentView(humanId)!;
+      matchmaker.handle(humanId, { type: "game.discard", cardId: view.hand.at(-1)!.id, commandId: randomUUID(), gameId: view.state.gameId, expectedRevision: view.state.revision });
+    };
+    playHumanTurn();
+    await vi.advanceTimersByTimeAsync(3);
+    expect(matchmaker.agentView(aiId)?.state.currentPlayerId).toBe(humanId);
+    model.decide.mockRejectedValue(new OpenRouterAgentError("timeout"));
+    for (let turn = 0; turn < 2; turn++) {
+      playHumanTurn();
+      await vi.advanceTimersByTimeAsync(45_000);
+    }
+    expect(matchmaker.agentView(aiId)?.state.phase).toBe("playing");
+    expect(humanSocket.messages.some(({ type }) => type === "game.ended")).toBe(false);
   });
 
   it("blocks showdown budget exhaustion and storage failures without further model requests", async () => {

@@ -104,11 +104,24 @@ per agent. No provider request occurs when the reservation cannot be made.
 
 Requests are capped at 24 KB, 1,200 output tokens and 15 seconds, with endpoint
 prices capped at USD 1/M input tokens and USD 5/M output tokens and zero
-per-request charge. Public search/browser tools are not enabled. At most two
-invalid game-command attempts are permitted before the agent forfeits; provider
-failure or exhausted budget stops its participation instead of switching models
-or choosing moves with another strategy. The normal showdown deadline handles
-missing final layouts. Late replies for a stale revision are discarded.
+per-request charge. Public search/browser tools are not enabled. Actions and
+card IDs are constrained to the current turn stage and the agent's own hand.
+These constraints never choose a strategic action or validate declaration maths.
+
+A transient provider/format error gets one correction retry using the same model
+and a new budget reservation. Each call is capped by the remaining normal turn
+deadline, with a one-second safety margin. After two failed attempts for the same
+revision, requests pause and the normal human timeout rule handles that turn.
+A technical forfeit occurs only after three consecutive failed AI turns, or an
+unrecoverable access/configuration problem or exhausted shared budget. A completed
+legal discard resets that failure streak. Invalid declarations still commit the
+same immediate drop as human declarations. No other model or strategy engine
+substitutes for the selected model. The normal showdown deadline handles missing
+final layouts. Late replies for a stale revision are discarded.
+
+Technical forfeits carry an explicit server-authored cause to the game result and
+archive. Diagnostics record bounded error codes, stage, revision, request ID and
+timing; they never log hands, model prompts, agent memory or provider response text.
 
 ## Information boundary
 
@@ -125,7 +138,18 @@ AI profiles use a reserved, non-loginable email domain and cannot redeem OTPs.
 Adapter tests mock OpenRouter and do not incur model charges. Runtime tests
 exercise actual game commands with a simulated model client. Isolated real
 PostgreSQL tests cover rating migration/isolation, immutable identities,
-restart memory and concurrent budget reservations:
+restart memory and concurrent budget reservations. Operator qualification now
+requires repeated full draw/discard cycles, rather than just one opening draw:
+
+```sh
+node dist/ops/ai-check.js --turns 10 MODEL_ID
+```
+
+It uses disposable in-memory games and fixture-local notes, and charges every
+real request to the same shared ledger without creating ranked matches. The
+report includes complete/missed turns, retries, error codes, timing and costs.
+
+Run isolated database checks with:
 
 ```sh
 AI_RATINGS_TEST_DATABASE_URL=postgresql://USER:PASS@127.0.0.1:PORT/trinity_ai_test \

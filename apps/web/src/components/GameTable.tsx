@@ -10,6 +10,7 @@ import {
 } from "react";
 import { profileBadges, type Card, type GamePublicState } from "@trinitymatrix/protocol";
 import { cardLabel, validateDeclaration, validateMeld } from "@trinitymatrix/game-domain";
+import type { AiPlayerForfeit } from "../api";
 import {
   getTurnSoundsEnabled,
   playTurnEnded,
@@ -264,6 +265,7 @@ export function GameTable({
   playerId,
   notice,
   winner,
+  aiForfeits = [],
   onDraw,
   onDiscard,
   onDeclare,
@@ -280,7 +282,9 @@ export function GameTable({
     name: string;
     reason: "declaration" | "invalid-declaration" | "player-dropped";
     score?: number | undefined;
+    technicalForfeit?: AiPlayerForfeit;
   } | null;
+  aiForfeits?: readonly AiPlayerForfeit[];
   onDraw: (source: "stock" | "discard", layout: string[][]) => void;
   onDiscard: (cardId: string, layout: string[][]) => void;
   onDeclare: (discardCardId: string, melds: string[][]) => void;
@@ -541,6 +545,10 @@ export function GameTable({
       </div>
     </header>
 
+    {aiForfeits.length > 0 && <aside className="ai-forfeit-notice" role="status" aria-label="AI player availability">
+      {aiForfeits.map((entry) => <p key={entry.playerId}><strong>{entry.playerName} forfeited.</strong> {entry.reason}</p>)}
+    </aside>}
+
     {aiPlayers.length > 0 && <details className="ai-table-models">
       <summary>AI players and models</summary>
       <ul>{aiPlayers.map((player) => <li key={player.id}><strong>{player.displayName}</strong><span>AI player</span><code>{player.aiModelId ?? "Model unavailable"}</code></li>)}</ul>
@@ -732,7 +740,8 @@ export function GameTable({
       <span className="eyebrow">Round complete</span>
       <h2 id="result-title">{winner.id === playerId ? "You won!" : `${winner.name} won`}</h2>
       <p>{winner.reason === "player-dropped"
-        ? "Another player dropped, so the last active player won the round."
+        ? winner.technicalForfeit ? `${winner.technicalForfeit.playerName} forfeited. ${winner.technicalForfeit.reason}`
+          : "Another player dropped, so the last active player won the round."
         : winner.reason === "invalid-declaration" && self?.status === "dropped"
             ? "Your show was invalid, so the remaining player won the round."
           : winner.reason === "invalid-declaration"

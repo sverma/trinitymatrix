@@ -67,6 +67,29 @@ describe("useGameSocket", () => {
     unmount();
   });
 
+  it("retains a technical AI forfeit reason when the game result immediately follows it", () => {
+    const { result, unmount } = renderHook(() => useGameSocket(true));
+    const socket = FakeWebSocket.instances[0]!;
+    const technical = { type: "game.player-dropped", playerId: "ai-1", playerName: "Model One", reasonCode: "AI_BUDGET_EXHAUSTED", reason: "The shared daily AI budget was reached." };
+    act(() => {
+      socket.open();
+      socket.receive({ type: "session.ready", playerId: "player-1", displayName: "Asha" });
+      socket.receive(technical);
+      socket.receive({ type: "game.ended", winnerId: "player-1", winnerName: "Asha", reason: "player-dropped" });
+    });
+    expect(result.current.winner?.technicalForfeit).toMatchObject({ playerId: "ai-1", reasonCode: "AI_BUDGET_EXHAUSTED", reason: technical.reason });
+    expect(result.current.notice).toContain(technical.reason);
+    expect(result.current.aiForfeits).toHaveLength(1);
+    act(() => {
+      socket.receive({ type: "game.player-dropped", playerId: "player-2", playerName: "Kabir" });
+      socket.receive({ type: "game.ended", winnerId: "player-1", winnerName: "Asha", reason: "player-dropped" });
+    });
+    expect(result.current.winner).not.toHaveProperty("technicalForfeit");
+    act(() => result.current.returnToLobby());
+    expect(result.current.aiForfeits).toEqual([]);
+    unmount();
+  });
+
   it("stops retrying and requests sign-in after a policy close", () => {
     vi.useFakeTimers();
     const authenticationRequired = vi.fn();

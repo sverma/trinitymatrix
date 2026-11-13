@@ -12,6 +12,12 @@ describe("client protocol", () => {
     expect(() => parseClientMessage({ type: "queue.leave", playerId: "forged" })).toThrow();
   });
 
+  it("does not let clients attach an AI technical reason to a drop command", () => {
+    const command = { type: "game.drop", commandId: "00000000-0000-4000-8000-000000000001", gameId: "00000000-0000-4000-8000-000000000002", expectedRevision: 1 };
+    expect(() => parseClientMessage({ ...command, reasonCode: "AI_UNAVAILABLE", reason: "Provider unavailable." })).toThrow();
+    expect(() => parseClientMessage({ ...command, aiFailure: { code: "AI_UNAVAILABLE", message: "Provider unavailable." } })).toThrow();
+  });
+
   it("accepts a showdown hand submission with singleton unmatched groups", () => {
     const command = {
       type: "game.submit-hand",
@@ -50,6 +56,14 @@ describe("client protocol", () => {
 });
 
 describe("server protocol", () => {
+  it("accepts bounded server-authored AI forfeit reasons while preserving ordinary drops", () => {
+    const event = { type: "game.player-dropped", playerId: "ai-1", playerName: "Model One" };
+    expect(parseServerMessage(event)).toEqual(event);
+    const technical = { ...event, reasonCode: "AI_BUDGET_EXHAUSTED", reason: "The shared daily AI budget was reached." };
+    expect(parseServerMessage(technical)).toEqual(technical);
+    expect(() => parseServerMessage({ ...technical, reasonCode: "ARBITRARY_PROVIDER_ERROR" })).toThrow();
+    expect(() => parseServerMessage({ ...technical, reason: "x".repeat(301) })).toThrow();
+  });
   const chatEvent = {
     type: "chat.message",
     gameName: "amber-forest-12345678",
