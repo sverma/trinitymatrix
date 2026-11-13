@@ -4,15 +4,18 @@ import type { Card } from "@trinitymatrix/protocol";
 import type { AiAgentDecision, AiAgentDecisionResult, AiAgentObservation } from "./ai-openrouter";
 import { OpenRouterAgentClient, OpenRouterAgentError } from "./ai-openrouter";
 import type { AiIdentity, AiStore } from "./ai-repository";
-import { qualifyAiModel } from "./ai-qualification";
+import { qualifyAiModel, winningQualificationGame } from "./ai-qualification";
 import { RankingGame } from "./game";
+import { AI_GAME_PROTOCOL_IDENTITY_VERSION, AI_LEGACY_V1_PROTOCOL_VERSION, type AiGameRulesFacts } from "./ai-game-protocol";
+import { checkAiRules, unavailableAiRules, AI_RULES_TOOL_VERSION } from "./ai-rule-tools";
+import { missedWinDeclaration } from "./ai-missed-win.fixture";
 
 const identity: AiIdentity = {
   id: "33333333-3333-4333-8333-333333333333", modelId: "provider/model-version", modelName: "Example model",
   displayName: "Model AI", memory: "Private real-profile memory must not be read or changed", enabled: true,
   rating: 1234, gamesPlayed: 99, wins: 50
 };
-type Input = { modelId: string; observation: AiAgentObservation; memory: string };
+type Input = { modelId: string; observation: AiAgentObservation; memory: string; protocolId?: string; rulesFacts?: AiGameRulesFacts };
 
 function selected(input: Input, override: Partial<AiAgentDecision> = {}): AiAgentDecisionResult {
   const drawn = input.observation.hand.length === 14;
@@ -63,6 +66,8 @@ describe("operator full-turn model qualification", () => {
     expect(encoded).not.toContain(identity.memory);
     expect(encoded).not.toContain('"hand"');
     for (const [input] of decide.mock.calls) {
+      expect(input.protocolId).toBe(AI_LEGACY_V1_PROTOCOL_VERSION);
+      expect(input.rulesFacts).toBeUndefined();
       expect(input.observation.state).not.toHaveProperty("hands");
       expect(input.observation.state).not.toHaveProperty("stock");
     }
@@ -80,7 +85,7 @@ describe("operator full-turn model qualification", () => {
       turnsMissed: 1, providerErrors: 1, unknownCostRequests: 1, maxLatencyMs: 15_000,
       errors: { timeout: 1, "budget-unavailable": 1 } });
     expect(decide).toHaveBeenCalledTimes(1);
-    expect(ledger.finishRequest).toHaveBeenCalledWith(expect.any(String), null, false);
+    expect(ledger.finishRequest).toHaveBeenCalledWith(expect.any(String), null, false, { outcome: "provider-failed" });
   });
 
   it("runs complete cycles through the real adapter using only a simulated provider transport", async () => {
@@ -241,6 +246,79 @@ describe("operator full-turn model qualification", () => {
     const report = await qualifyAiModel({ identity, ledger, createClient, dailyBudgetUsd: 10, turns: 1 });
     expect(report).toMatchObject({ status: "passed", turnsCompleted: 1, invalidActions: 1, retries: 1,
       errors: { "invalid-decision": 1 }, httpStatuses: { "200": 1 }, finishReasons: { stop: 1 }, knownCostUsd: 0.004 });
-    expect(ledger.finishRequest).toHaveBeenCalledWith(expect.any(String), 0.002, false);
+    expect(ledger.finishRequest).toHaveBeenCalledWith(expect.any(String), 0.002, false, { outcome: "provider-failed" });
+  });
+
+  it("qualifies the real missed-win fixture through v2 adapter/rules facts and audits a same-model policy retry", async () => {
+    const { ledger } = setup();
+    const v2 = { ...identity, protocolId: AI_GAME_PROTOCOL_IDENTITY_VERSION, selectable: true };
+    const compute = vi.fn(async (input: Parameters<typeof checkAiRules>[0]) => checkAiRules(input));
+    const supplied: Input[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      const request = JSON.parse(String(init?.body));
+      const envelope = JSON.parse(request.messages[1].content);
+      supplied.push({ modelId: request.model, ...envelope });
+      const chosen = supplied.length === 1
+        ? { action: "discard", cardId: missedWinDeclaration.cardId, groups: [], memory: "Improve points first." }
+        : { action: "declare", cardId: missedWinDeclaration.cardId, groups: missedWinDeclaration.groups, memory: "Declare a legal win immediately." };
+      return Response.json({ model: request.model, choices: [{ finish_reason: "stop", message: { content: JSON.stringify(chosen) } }],
+        usage: { cost: 0.001, prompt_tokens: 1000, completion_tokens: 100 } });
+    });
+    const report = await qualifyAiModel({ identity: v2, ledger, dailyBudgetUsd: 10, scenario: "winning-hand", serverRevision: "test-server-revision",
+      rulesTools: { compute }, createClient: (timeoutMs) => new OpenRouterAgentClient({ apiKey: "synthetic-provider-key", timeoutMs, fetch: fetcher }) });
+    expect(report).toMatchObject({ protocolId: AI_GAME_PROTOCOL_IDENTITY_VERSION, scenario: "winning-hand", status: "passed", turnsRequested: 1,
+      turnsCompleted: 1, draws: 0, discards: 0, declarations: 1, validDeclarations: 1, terminalFixtures: 1, requests: 2, retries: 1,
+      policyRejected: 1, providerErrors: 0, winningDecisionsAvailable: 1, winningDecisionsMissed: 1, errors: { "missed-declaration": 1 } });
+    expect(compute).toHaveBeenCalledTimes(1);
+    expect(Object.keys(compute.mock.calls[0]![0]).sort()).toEqual(["hand", "visibleDiscard", "wildRank"]);
+    expect(supplied.every((input) => input.modelId === identity.modelId && input.observation.hand.length === 14)).toBe(true);
+    expect(supplied[0]!.rulesFacts?.immediateDeclaration).not.toBeNull();
+    for (const [, , , context] of ledger.reserveRequest.mock.calls) expect(context).toMatchObject({ protocolId: AI_GAME_PROTOCOL_IDENTITY_VERSION,
+      matchId: expect.any(String), gameRevision: supplied[0]!.observation.state.revision, toolsVersion: AI_RULES_TOOL_VERSION,
+      declarationAvailable: true, serverRevision: "test-server-revision" });
+    expect(ledger.finishRequest).toHaveBeenNthCalledWith(1, expect.any(String), 0.001, false, { action: "discard", outcome: "policy-rejected" });
+    expect(ledger.finishRequest).toHaveBeenNthCalledWith(2, expect.any(String), 0.001, true, { action: "declare", outcome: "accepted" });
+    expect(ledger.saveMemory).not.toHaveBeenCalled();
+    expect(JSON.stringify(report)).not.toMatch(/winning-card|synthetic-provider-key|Improve points|Declare a legal win|\"groups\"/);
+  });
+
+  it("fails winning-hand qualification after two missed declarations without executing the tool's move", async () => {
+    const { ledger, decide, createClient } = setup();
+    let fixture: RankingGame | undefined;
+    const report = await qualifyAiModel({ identity: { ...identity, protocolId: AI_GAME_PROTOCOL_IDENTITY_VERSION }, ledger, createClient,
+      dailyBudgetUsd: 10, scenario: "winning-hand", rulesTools: { compute: async (input) => checkAiRules(input) },
+      createGame: (who, human) => { fixture = winningQualificationGame(who, human); return fixture; } });
+    expect(report).toMatchObject({ status: "failed", turnsCompleted: 0, turnsMissed: 1, requests: 2, policyRejected: 2,
+      winningDecisionsMissed: 2, validDeclarations: 0, forcedDrops: 0, providerErrors: 0, errors: { "missed-declaration": 2, "attempts-exhausted": 1 } });
+    expect(decide).toHaveBeenCalledTimes(2);
+    expect(fixture!.handFor(identity.id)).toHaveLength(14);
+    expect(fixture!.publicState().phase).toBe("playing");
+    expect(ledger.saveMemory).not.toHaveBeenCalled();
+  });
+
+  it("records unavailable worker checks as unknown and leaves ordinary v2 decisions model-controlled", async () => {
+    const { ledger, createClient } = setup();
+    const compute = vi.fn(async () => unavailableAiRules("time-budget"));
+    const report = await qualifyAiModel({ identity: { ...identity, protocolId: AI_GAME_PROTOCOL_IDENTITY_VERSION }, ledger, createClient,
+      dailyBudgetUsd: 10, turns: 1, rulesTools: { compute } });
+    expect(report).toMatchObject({ status: "passed", turnsCompleted: 1, draws: 1, discards: 1, rulesChecks: 2,
+      rulesUnavailable: 2, winningDecisionsAvailable: 0, policyRejected: 0 });
+    for (const [, , , context] of ledger.reserveRequest.mock.calls) expect(context).toMatchObject({ protocolId: AI_GAME_PROTOCOL_IDENTITY_VERSION,
+      toolsVersion: AI_RULES_TOOL_VERSION, declarationAvailable: null });
+  });
+
+  it("does not spend on unknown identity protocol versions", async () => {
+    const { ledger, decide, createClient } = setup();
+    const report = await qualifyAiModel({ identity: { ...identity, protocolId: "unknown-protocol" }, ledger, createClient, dailyBudgetUsd: 10 });
+    expect(report).toMatchObject({ status: "failed", requests: 0, errors: { configuration: 1 } });
+    expect(ledger.reserveRequest).not.toHaveBeenCalled(); expect(decide).not.toHaveBeenCalled();
+  });
+
+  it("settles late results as stale without applying a fixture move", async () => {
+    const { ledger, decide, createClient } = setup();
+    decide.mockImplementation(async (input) => { vi.setSystemTime(input.observation.state.turnEndsAt + 1); return selected(input); });
+    const report = await qualifyAiModel({ identity, ledger, createClient, dailyBudgetUsd: 10, turns: 1 });
+    expect(report).toMatchObject({ status: "failed", turnsCompleted: 0, draws: 0, errors: { "turn-deadline": 1 } });
+    expect(ledger.finishRequest).toHaveBeenCalledWith(expect.any(String), 0.001, false, { action: "draw-stock", outcome: "stale" });
   });
 });

@@ -95,6 +95,10 @@ export type AiPlayer = {
   displayName: string;
   modelId: string;
   modelName: string;
+  protocolId?: string;
+  protocolVersion?: string;
+  rulesRevision?: string;
+  protocolHash?: string;
   available: boolean;
   reason?: string;
   rating: number;

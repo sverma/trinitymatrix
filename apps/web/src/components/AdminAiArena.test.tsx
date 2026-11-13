@@ -35,6 +35,15 @@ function mockArena(error?: string, selectedRoster: AiPlayerRoster = roster) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("administrator AI-only arena", () => {
+  it("identifies the v2 cohort alongside the selected model in the administrator picker", async () => {
+    mockArena(undefined, { ...roster, players: roster.players.map((agent) => ({ ...agent, displayName: `${agent.displayName} · v2`, protocolVersion: "trinity-agent-protocol/2.0.0" })) });
+    render(<AdminAiArena />);
+    expect(await screen.findAllByText("AI protocol v2.0.0")).toHaveLength(roster.players.length);
+    expect(screen.getByText(/separate AI identities and fresh ratings/)).toHaveTextContent("Earlier versions keep their results");
+    expect(screen.getByRole("checkbox", { name: "Select Agent 1 · v2" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "Select Agent 6 · v2" })).toBeDisabled();
+  });
+
   it("starts one requested match with exactly the chosen model identities", async () => {
     const user = userEvent.setup();
     const fetchMock = mockArena();

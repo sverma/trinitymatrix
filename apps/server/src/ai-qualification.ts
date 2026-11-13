@@ -1,17 +1,24 @@
 import { randomUUID } from "node:crypto";
 import type { AiAgentDecisionResult, AiAgentObservation } from "./ai-openrouter";
 import { AI_MAX_DECISION_TIME_MS, OpenRouterAgentError } from "./ai-openrouter";
-import type { AiIdentity, AiStore } from "./ai-repository";
+import type { AiIdentity, AiStore, AiRequestCompletion } from "./ai-repository";
 import { decisionCommand } from "./ai-players";
 import { RankingGame } from "./game";
+import { validateDeclaration } from "@trinitymatrix/game-domain";
+import { AI_GAME_PROTOCOL_IDENTITY_VERSION, AI_LEGACY_V1_PROTOCOL_VERSION, type AiGameRulesFacts } from "./ai-game-protocol";
+import { AiRuleToolService } from "./ai-rule-tool-service";
+import { unavailableAiRules } from "./ai-rule-tools";
+import { missedWinHand14, missedWinWildRank } from "./ai-missed-win.fixture";
 
 type QualificationClient = {
-  decide(input: { modelId: string; observation: AiAgentObservation; memory: string }): Promise<AiAgentDecisionResult>;
+  decide(input: { modelId: string; observation: AiAgentObservation; memory: string; protocolId: string; rulesFacts?: AiGameRulesFacts }): Promise<AiAgentDecisionResult>;
   cancelAll(): void;
 };
 
 export type AiQualificationReport = {
   modelId: string;
+  protocolId: string;
+  scenario: "full-turn" | "winning-hand";
   status: "passed" | "failed" | "budget-unavailable" | "disabled";
   turnsRequested: number;
   turnsCompleted: number;
@@ -34,6 +41,11 @@ export type AiQualificationReport = {
   maxTurnDurationMs: number;
   knownCostUsd: number;
   unknownCostRequests: number;
+  rulesChecks: number;
+  rulesUnavailable: number;
+  policyRejected: number;
+  winningDecisionsAvailable: number;
+  winningDecisionsMissed: number;
 };
 
 /** Fixture-only opponent. It never enters matchmaking, archival, profiles or ratings. */
@@ -45,6 +57,20 @@ function qualificationGame(identity: AiIdentity, humanId: string): RankingGame {
   const snapshot = seeded.snapshot();
   snapshot.currentPlayerIndex = snapshot.seats.findIndex(({ id }) => id === identity.id);
   snapshot.turnEndsAt = Date.now() + 45_000;
+  return RankingGame.restore(snapshot);
+}
+
+/** Sanitized missed-win regression, never an archived/live/ranked game. */
+export function winningQualificationGame(identity: AiIdentity, humanId: string): RankingGame {
+  const base = qualificationGame(identity, humanId);
+  const snapshot = base.snapshot();
+  const ownIds = new Set(missedWinHand14.map(({ id }) => id));
+  snapshot.hands = snapshot.hands.map((entry) => entry.playerId === identity.id
+    ? { playerId: identity.id, cards: structuredClone(missedWinHand14) } : entry);
+  snapshot.stock = snapshot.stock.filter(({ id }) => !ownIds.has(id));
+  snapshot.wildRank = missedWinWildRank;
+  snapshot.drawnBy = identity.id;
+  snapshot.drawnCardId = missedWinHand14.at(-1)!.id;
   return RankingGame.restore(snapshot);
 }
 
@@ -77,42 +103,54 @@ export async function qualifyAiModel(options: {
   ledger: Pick<AiStore, "reserveRequest" | "finishRequest">;
   dailyBudgetUsd: number;
   turns?: number;
+  scenario?: "full-turn" | "winning-hand";
+  serverRevision?: string;
+  rulesTools?: Pick<AiRuleToolService, "compute">;
   createClient: (timeoutMs: number) => QualificationClient;
   createGame?: (identity: AiIdentity, syntheticHumanId: string) => RankingGame;
 }): Promise<AiQualificationReport> {
-  const turns = options.turns ?? 10;
+  const turns = options.turns ?? (options.scenario === "winning-hand" ? 1 : 10);
   if (!Number.isInteger(turns) || turns < 1 || turns > 10) throw new Error("Qualification turns must be an integer from 1 through 10.");
   if (!Number.isFinite(options.dailyBudgetUsd) || options.dailyBudgetUsd <= 0 || options.dailyBudgetUsd > 10) {
     throw new Error("The shared daily qualification budget must be positive and at most USD 10.");
   }
   const { identity, ledger } = options;
+  const protocolId = identity.protocolId ?? AI_LEGACY_V1_PROTOCOL_VERSION;
+  const v2 = protocolId === AI_GAME_PROTOCOL_IDENTITY_VERSION;
+  const scenario = options.scenario ?? "full-turn";
+  if (!["full-turn", "winning-hand"].includes(scenario)) throw new Error("Unknown qualification scenario.");
   const report: AiQualificationReport = {
-    modelId: identity.modelId, status: identity.enabled ? "passed" : "disabled", turnsRequested: turns,
+    modelId: identity.modelId, protocolId, scenario, status: identity.enabled ? "passed" : "disabled", turnsRequested: turns,
     turnsCompleted: 0, turnsMissed: 0, requests: 0, draws: 0, discards: 0, declarations: 0,
     validDeclarations: 0, invalidDeclarations: 0, terminalFixtures: 0,
     invalidActions: 0, retries: 0, providerErrors: 0, forcedDrops: 0, errors: {}, httpStatuses: {}, finishReasons: {},
-    maxLatencyMs: 0, maxTurnDurationMs: 0, knownCostUsd: 0, unknownCostRequests: 0
+    maxLatencyMs: 0, maxTurnDurationMs: 0, knownCostUsd: 0, unknownCostRequests: 0,
+    rulesChecks: 0, rulesUnavailable: 0, policyRejected: 0, winningDecisionsAvailable: 0, winningDecisionsMissed: 0
   };
   const record = (code: string) => { report.errors[code] = (report.errors[code] ?? 0) + 1; };
   if (!identity.enabled) { record("agent-disabled"); return report; }
+  if (!v2 && protocolId !== AI_LEGACY_V1_PROTOCOL_VERSION) { record("configuration"); report.status = "failed"; return report; }
+  const ownedTools = v2 && !options.rulesTools ? new AiRuleToolService() : null;
+  const rulesTools = options.rulesTools ?? ownedTools;
   let syntheticHumanId = randomUUID();
-  const createGame = options.createGame ?? qualificationGame;
+  const createGame = options.createGame ?? (scenario === "winning-hand" ? winningQualificationGame : qualificationGame);
   let game = createGame(identity, syntheticHumanId);
   let memory = "";
   let publicHistory: string[] = [];
   let feedback = "";
 
-  while (report.turnsCompleted < turns && report.status === "passed") {
+  try { while (report.turnsCompleted < turns && report.status === "passed") {
     const turnStarted = Date.now();
     let revision = -1;
     let attempts = 0;
     let turnComplete = false;
+    let rulesFacts: AiGameRulesFacts | undefined;
     while (!turnComplete && report.status === "passed") {
       const state = game.publicState();
       if (state.phase !== "playing" || state.currentPlayerId !== identity.id) {
         record("fixture-state-invalid"); report.status = "failed"; break;
       }
-      if (state.revision !== revision) { revision = state.revision; attempts = 0; feedback = ""; }
+      if (state.revision !== revision) { revision = state.revision; attempts = 0; feedback = ""; rulesFacts = undefined; }
       const remainingMs = state.turnEndsAt - Date.now() - 1_000;
       if (remainingMs <= 0) { record("turn-deadline"); report.status = "failed"; break; }
       if (attempts >= 2) { record("attempts-exhausted"); report.status = "failed"; break; }
@@ -120,20 +158,32 @@ export async function qualifyAiModel(options: {
         playerId: identity.id, state, hand: game.handFor(identity.id),
         publicHistory: [...publicHistory, ...(feedback ? [feedback] : [])]
       };
+      if (v2 && !rulesFacts) {
+        report.rulesChecks += 1;
+        try { rulesFacts = await rulesTools!.compute({ hand: observation.hand, wildRank: state.wildRank, visibleDiscard: state.topDiscard }, Math.min(1000, remainingMs)); }
+        catch { rulesFacts = unavailableAiRules("tool-error"); }
+        if (rulesFacts.status === "unavailable") report.rulesUnavailable += 1;
+        if (rulesFacts.status === "complete" && rulesFacts.immediateDeclaration) report.winningDecisionsAvailable += 1;
+      }
       let requestId: string | null;
       try {
-        requestId = await ledger.reserveRequest(identity.id, identity.modelId, options.dailyBudgetUsd);
+        requestId = await ledger.reserveRequest(identity.id, identity.modelId, options.dailyBudgetUsd, {
+          protocolId, matchId: state.gameId, gameRevision: state.revision,
+          ...(rulesFacts ? { toolsVersion: rulesFacts.toolVersion,
+            declarationAvailable: rulesFacts.status === "complete" ? !!rulesFacts.immediateDeclaration : null } : {}),
+          ...(options.serverRevision ? { serverRevision: options.serverRevision.slice(0, 100) } : {})
+        });
       } catch { record("ledger-unavailable"); report.status = "failed"; break; }
       if (!requestId) { record("budget-unavailable"); report.status = "budget-unavailable"; break; }
       const afterReservationMs = state.turnEndsAt - Date.now() - 1_000;
       if (afterReservationMs <= 0) {
-        try { await ledger.finishRequest(requestId, 0, false); } catch { record("ledger-unavailable"); }
+        try { await ledger.finishRequest(requestId, 0, false, { outcome: "cancelled" }); } catch { record("ledger-unavailable"); }
         record("turn-deadline"); report.status = "failed"; break;
       }
       let client: QualificationClient;
       try { client = options.createClient(Math.min(AI_MAX_DECISION_TIME_MS, afterReservationMs)); }
       catch {
-        try { await ledger.finishRequest(requestId, 0, false); } catch { record("ledger-unavailable"); }
+        try { await ledger.finishRequest(requestId, 0, false, { outcome: "cancelled" }); } catch { record("ledger-unavailable"); }
         record("client-configuration"); report.status = "failed"; break;
       }
       if (attempts > 0) report.retries += 1;
@@ -142,14 +192,17 @@ export async function qualifyAiModel(options: {
       const started = Date.now();
       let result: AiAgentDecisionResult;
       try {
-        result = await client.decide({ modelId: identity.modelId, observation, memory });
+        result = await client.decide({ modelId: identity.modelId, observation, memory, protocolId, ...(rulesFacts ? { rulesFacts } : {}) });
         report.maxLatencyMs = Math.max(report.maxLatencyMs, Date.now() - started);
       } catch (error) {
         report.maxLatencyMs = Math.max(report.maxLatencyMs, Date.now() - started);
         const known = error instanceof OpenRouterAgentError ? error : null;
         const code = known?.code ?? "qualification-unavailable";
-        record(code); report.providerErrors += 1;
-        if (code === "invalid-json" || code === "invalid-decision" || code === "invalid-card-reference") report.invalidActions += 1;
+        const policyRejected = code === "missed-declaration" || code === "invalid-declaration";
+        record(code);
+        if (policyRejected) report.policyRejected += 1; else report.providerErrors += 1;
+        if (policyRejected || code === "invalid-json" || code === "invalid-decision" || code === "invalid-card-reference") report.invalidActions += 1;
+        if (code === "missed-declaration") report.winningDecisionsMissed += 1;
         const status = known?.metadata.status;
         if (status !== undefined && Number.isInteger(status) && status >= 100 && status <= 599) {
           report.httpStatuses[String(status)] = (report.httpStatuses[String(status)] ?? 0) + 1;
@@ -159,29 +212,52 @@ export async function qualifyAiModel(options: {
         const costUsd = known?.metadata.usage?.costUsd ?? null;
         if (costUsd === null) report.unknownCostRequests += 1;
         else report.knownCostUsd += costUsd;
-        try { await ledger.finishRequest(requestId, costUsd, false); }
+        try { await ledger.finishRequest(requestId, costUsd, false, {
+          ...(known?.metadata.action ? { action: known.metadata.action } : {}),
+          outcome: code === "cancelled" ? "cancelled" : policyRejected ? "policy-rejected" : "provider-failed"
+        }); }
         catch { record("ledger-unavailable"); report.status = "failed"; }
         feedback = `Your previous request failed with ${code}. Return a valid action for the same observed turn.`;
-        if (code === "model-mismatch" || code === "configuration" || code === "invalid-observation") report.status = "failed";
+        if (code === "model-mismatch" || code === "configuration" || code === "invalid-observation" || code === "invalid-rules-facts") report.status = "failed";
         continue;
       } finally {
         client.cancelAll();
       }
       if (result.usage.costUsd === null) report.unknownCostRequests += 1;
       else report.knownCostUsd += result.usage.costUsd;
-      try { await ledger.finishRequest(requestId, result.usage.costUsd, true); }
-      catch { record("ledger-unavailable"); report.status = "failed"; break; }
-      if (result.modelId !== identity.modelId) { record("model-mismatch"); report.status = "failed"; break; }
-      if (Date.now() >= state.turnEndsAt) { record("turn-deadline"); report.status = "failed"; break; }
+      const settle = async (success: boolean, outcome: AiRequestCompletion["outcome"]): Promise<boolean> => {
+        try { await ledger.finishRequest(requestId, result.usage.costUsd, success, { action: result.decision.action, outcome }); return true; }
+        catch { record("ledger-unavailable"); report.status = "failed"; return false; }
+      };
+      if (result.modelId !== identity.modelId) { await settle(false, "provider-failed"); record("model-mismatch"); report.status = "failed"; break; }
+      if (Date.now() >= state.turnEndsAt) { await settle(false, "stale"); record("turn-deadline"); report.status = "failed"; break; }
+      const mustDeclare = scenario === "winning-hand" || (v2 && rulesFacts?.status === "complete" && !!rulesFacts.immediateDeclaration);
+      const missedWin = mustDeclare && result.decision.action !== "declare";
+      const invalidPlan = (v2 || scenario === "winning-hand") && result.decision.action === "declare"
+        && !validateDeclaration(observation.hand, result.decision.cardId ?? "", result.decision.groups, state.wildRank).valid;
+      if (missedWin || invalidPlan) {
+        const code = missedWin ? "missed-declaration" : "invalid-declaration";
+        record(code); report.invalidActions += 1; report.policyRejected += 1;
+        if (missedWin) report.winningDecisionsMissed += 1;
+        if (!(await settle(false, "policy-rejected"))) break;
+        feedback = "An immediately legal declaration is available. Return a valid declaration now; do not discard to improve points.";
+        continue;
+      }
       let applied;
       try { applied = game.apply(identity.id, decisionCommand(result.decision, observation)); }
-      catch { report.invalidActions += 1; record("invalid-action-shape"); feedback = "Return a valid game action matching your current hand size."; continue; }
+      catch {
+        report.invalidActions += 1; record("invalid-action-shape"); feedback = "Return a valid game action matching your current hand size.";
+        if (!(await settle(false, "server-rejected"))) break;
+        continue;
+      }
       if (!applied.accepted) {
         report.invalidActions += 1;
         record(`command-${applied.code.toLowerCase()}`);
         feedback = `The server rejected your action: ${applied.message}`;
+        if (!(await settle(false, "server-rejected"))) break;
         continue;
       }
+      if (!(await settle(true, "accepted"))) break;
       if (result.decision.action === "declare") report.declarations += 1;
       if (applied.dropped) {
         // The model chose a committed declaration and lost under ordinary rules.
@@ -214,7 +290,7 @@ export async function qualifyAiModel(options: {
       game = createGame(identity, syntheticHumanId);
       memory = ""; publicHistory = []; feedback = "";
     }
-  }
+  } } finally { await ownedTools?.stop(); }
   report.knownCostUsd = Math.round(report.knownCostUsd * 1e8) / 1e8;
   return report;
 }

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Card } from "@trinitymatrix/protocol";
 import { validateDeclaration } from "@trinitymatrix/game-domain";
+import { AI_GAME_PROTOCOL_IDENTITY_VERSION, AI_GAME_PROTOCOL_REVISION_HASH, AI_GAME_PROTOCOL_VERSION, AI_GAME_RULES_REVISION, AI_GAME_RULES_TOOL_VERSION, AI_LEGACY_V1_PROTOCOL_VERSION, AI_LEGACY_V1_SYSTEM_PROMPT, buildSystemPrompt, type AiGameRulesFacts } from "./ai-game-protocol";
+import { missedWinDeclaration, missedWinHand13, missedWinHand14, missedWinWildRank } from "./ai-missed-win.fixture";
 import {
   AI_MAX_OUTPUT_TOKENS,
   AI_MAX_DECISION_TIME_MS,
@@ -80,11 +82,12 @@ function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
 }
 
-describe("model-bound OpenRouter player", () => {
+describe("legacy model-bound OpenRouter player", () => {
   it("sends the exact model, private player view and strict rules without model fallback", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody()));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    const result = await client.decide({ modelId, observation: observation(), memory: "Keep natural cards for 21." });
+    const view = observation();
+    const result = await client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: view, memory: "Keep natural cards for 21." });
     expect(result).toEqual({
       modelId,
       decision: decision(),
@@ -96,6 +99,8 @@ describe("model-bound OpenRouter player", () => {
     expect(init?.redirect).toBe("error");
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     const body = JSON.parse(String(init?.body));
+    expect(body.messages[0].content).toBe(AI_LEGACY_V1_SYSTEM_PROMPT);
+    expect(JSON.parse(body.messages[1].content)).toEqual({ observation: view, memory: "Keep natural cards for 21." });
     expect(Buffer.byteLength(String(init?.body))).toBeLessThanOrEqual(AI_MAX_REQUEST_BYTES);
     expect(body.model).toBe(modelId);
     expect(body).not.toHaveProperty("models");
@@ -131,7 +136,7 @@ describe("model-bound OpenRouter player", () => {
   ])("scopes inference settings to the exact binding $id without increasing output or price bounds", async ({ id, reasoning }) => {
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision(), { model: id })));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await client.decide({ modelId: id, observation: observation(), memory: "" });
+    await client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId: id, observation: observation(), memory: "" });
     expect(fetcher).toHaveBeenCalledTimes(1);
     const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
     expect(body.model).toBe(id);
@@ -147,10 +152,10 @@ describe("model-bound OpenRouter player", () => {
     const fetcher = vi.fn<typeof fetch>();
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
     const view = { ...observation(), opponentsHands: [{ playerId: otherId, cards: hand }] };
-    await expect(client.decide({ modelId, observation: view, memory: "" })).rejects.toMatchObject({ code: "invalid-observation" });
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: view, memory: "" })).rejects.toMatchObject({ code: "invalid-observation" });
     const nestedView = observation();
     Object.assign(nestedView.state.players[1]!, { hand });
-    await expect(client.decide({ modelId, observation: nestedView, memory: "" })).rejects.toMatchObject({ code: "invalid-observation" });
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: nestedView, memory: "" })).rejects.toMatchObject({ code: "invalid-observation" });
     expect(fetcher).not.toHaveBeenCalled();
   });
 
@@ -159,14 +164,14 @@ describe("model-bound OpenRouter player", () => {
     const view = observation();
     view.publicHistory = Array.from({ length: 30 }, () => "x".repeat(900));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await expect(client.decide({ modelId, observation: view, memory: "m".repeat(4_000) })).rejects.toMatchObject({ code: "request-too-large" });
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: view, memory: "m".repeat(4_000) })).rejects.toMatchObject({ code: "request-too-large" });
     expect(fetcher).not.toHaveBeenCalled();
   });
 
   it("does not substitute a provider-selected alternative model", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision(), { model: "example/other-model" })));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await expect(client.decide({ modelId, observation: observation(), memory: "" })).rejects.toMatchObject({
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: observation(), memory: "" })).rejects.toMatchObject({
       code: "model-mismatch", metadata: { status: 200, usage: { costUsd: 0.0015 } }
     });
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -184,7 +189,7 @@ describe("model-bound OpenRouter player", () => {
   ])("rejects malformed or unowned card decisions with safe costs", async ({ value, code }) => {
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(value)));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await expect(client.decide({ modelId, observation: observation(), memory: "" })).rejects.toMatchObject({
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: observation(), memory: "" })).rejects.toMatchObject({
       code, metadata: { status: 200, finishReason: "stop", usage: { costUsd: 0.0015, promptTokens: 1000, completionTokens: 100 } }
     });
   });
@@ -195,7 +200,7 @@ describe("model-bound OpenRouter player", () => {
     const chosen = decision({ action: "declare", cardId: "own-13", groups: [view.hand.slice(0, -1).map(({ id }) => id)] });
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(chosen)));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    expect((await client.decide({ modelId, observation: view, memory: "" })).decision).toEqual(chosen);
+    expect((await client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: view, memory: "" })).decision).toEqual(chosen);
     expect(validateDeclaration(view.hand, chosen.cardId!, chosen.groups, view.state.wildRank).valid).toBe(false);
   });
 
@@ -207,7 +212,7 @@ describe("model-bound OpenRouter player", () => {
   ])("distinguishes truncated, refused and malformed output while retaining known usage", async ({ overrides, code }) => {
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision(), overrides)));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await expect(client.decide({ modelId, observation: observation(), memory: "" })).rejects.toMatchObject({
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: observation(), memory: "" })).rejects.toMatchObject({
       code, metadata: { status: 200, usage: { costUsd: 0.0015 } }
     });
   });
@@ -221,7 +226,7 @@ describe("model-bound OpenRouter player", () => {
   ])("constrains legal actions and exact owned IDs for each draw/discard/showdown stage", async ({ view, actions, cardRequired, move }) => {
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(move)));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await client.decide({ modelId, observation: view, memory: "" });
+    await client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: view, memory: "" });
     const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
     const schema = body.response_format.json_schema.schema;
     expect(schema.properties.action.enum).toEqual(actions);
@@ -246,10 +251,10 @@ describe("model-bound OpenRouter player", () => {
       return jsonResponse(providerBody(decision(), { model: geminiId }));
     });
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await expect(client.decide({ modelId: geminiId, observation: observation(), memory: "" }))
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId: geminiId, observation: observation(), memory: "" }))
       .resolves.toMatchObject({ modelId: geminiId, decision: { action: "draw-stock", cardId: null } });
     fetcher.mockImplementation(async () => jsonResponse(providerBody(decision({ cardId: "own-0" }), { model: geminiId })));
-    await expect(client.decide({ modelId: geminiId, observation: observation(), memory: "" }))
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId: geminiId, observation: observation(), memory: "" }))
       .rejects.toMatchObject({ code: "invalid-decision" });
   });
 
@@ -273,12 +278,12 @@ describe("model-bound OpenRouter player", () => {
       return jsonResponse(providerBody(decision({ action: "discard", cardId: "own-13" }), { model: geminiId }));
     });
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await expect(client.decide({ modelId: geminiId, observation: view, memory: "" }))
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId: geminiId, observation: view, memory: "" }))
       .resolves.toMatchObject({ decision: { action: "discard", cardId: "own-13" } });
     fetcher.mockImplementation(async () => jsonResponse(providerBody(decision({
       action: "discard", cardId: "own-13", groups: Array.from({ length: 15 }, () => ["own-0"])
     }), { model: geminiId })));
-    await expect(client.decide({ modelId: geminiId, observation: view, memory: "" }))
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId: geminiId, observation: view, memory: "" }))
       .rejects.toMatchObject({ code: "invalid-decision" });
   });
 
@@ -287,7 +292,7 @@ describe("model-bound OpenRouter player", () => {
       const view = drawnObservation();
       const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision({ action: "discard", cardId: "own-13" }), { model: id })));
       const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-      await client.decide({ modelId: id, observation: view, memory: "" });
+      await client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId: id, observation: view, memory: "" });
       const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
       expect(body.response_format.json_schema.schema.properties.groups).toMatchObject({ maxItems: 14, items: { minItems: 3, maxItems: 14 } });
     }
@@ -298,7 +303,7 @@ describe("model-bound OpenRouter player", () => {
     view.state.topDiscard = { ...hand[0]!, id: "visible-discard" };
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision({ action: "draw-discard" }))));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await client.decide({ modelId, observation: view, memory: "" });
+    await client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: view, memory: "" });
     const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
     expect(body.response_format.json_schema.schema.properties.action.enum).toEqual(["draw-stock", "draw-discard"]);
   });
@@ -309,14 +314,14 @@ describe("model-bound OpenRouter player", () => {
       : decision({ action: "discard", cardId: "own-11", groups: [["own-0", "own-1", "own-2"], ["own-11"]] });
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(chosen)));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    const result = await client.decide({ modelId, observation: view, memory: "" });
+    const result = await client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: view, memory: "" });
     expect(result.decision).toEqual({ ...chosen, groups: [] });
   });
 
   it("rejects wrong-stage actions even when the provider ignores its structured schema", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision())));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await expect(client.decide({ modelId, observation: drawnObservation(), memory: "" }))
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: drawnObservation(), memory: "" }))
       .rejects.toMatchObject({ code: "invalid-decision", metadata: { usage: { costUsd: 0.0015 } } });
   });
 
@@ -325,7 +330,7 @@ describe("model-bound OpenRouter player", () => {
     view.state.currentPlayerId = otherId;
     const fetcher = vi.fn<typeof fetch>();
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await expect(client.decide({ modelId, observation: view, memory: "" })).rejects.toMatchObject({ code: "invalid-observation" });
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: view, memory: "" })).rejects.toMatchObject({ code: "invalid-observation" });
     expect(fetcher).not.toHaveBeenCalled();
   });
 
@@ -335,7 +340,7 @@ describe("model-bound OpenRouter player", () => {
     })));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
     try {
-      await client.decide({ modelId, observation: observation(), memory: "" });
+      await client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: observation(), memory: "" });
       throw new Error("Expected rejection");
     } catch (error) {
       expect(error).toMatchObject({ code: "invalid-response", metadata: { finishReason: "unknown", usage: { costUsd: 0.0015 } } });
@@ -348,7 +353,7 @@ describe("model-bound OpenRouter player", () => {
       usage: { cost: -1, prompt_tokens: 1.5, completion_tokens: "200" }
     })));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    expect((await client.decide({ modelId, observation: observation(), memory: "" })).usage)
+    expect((await client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: observation(), memory: "" })).usage)
       .toEqual({ costUsd: null, promptTokens: null, completionTokens: null });
   });
 
@@ -356,7 +361,7 @@ describe("model-bound OpenRouter player", () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(`Provider diagnostic with ${apiKey}`, { status: 503 }));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
     try {
-      await client.decide({ modelId, observation: observation(), memory: "" });
+      await client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: observation(), memory: "" });
       throw new Error("Expected rejection");
     } catch (error) {
       expect(error).toBeInstanceOf(OpenRouterAgentError);
@@ -370,7 +375,7 @@ describe("model-bound OpenRouter player", () => {
   it("bounds response streams even without Content-Length", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response("x".repeat(AI_MAX_RESPONSE_BYTES + 1)));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await expect(client.decide({ modelId, observation: observation(), memory: "" })).rejects.toMatchObject({ code: "response-too-large" });
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: observation(), memory: "" })).rejects.toMatchObject({ code: "response-too-large" });
   });
 
   it("times out even when a transport ignores AbortSignal", async () => {
@@ -380,7 +385,7 @@ describe("model-bound OpenRouter player", () => {
       return await new Promise<Response>(() => undefined);
     });
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher, timeoutMs: 10 });
-    await expect(client.decide({ modelId, observation: observation(), memory: "" })).rejects.toMatchObject({ code: "timeout" });
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: observation(), memory: "" })).rejects.toMatchObject({ code: "timeout" });
     expect(signal?.aborted).toBe(true);
   });
 
@@ -396,7 +401,7 @@ describe("model-bound OpenRouter player", () => {
         return await new Promise<Response>(() => undefined);
       });
       const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher, timeoutMs: configured });
-      const waiting = expect(client.decide({ modelId, observation: observation(), memory: "", timeoutMs: requested }))
+      const waiting = expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: observation(), memory: "", timeoutMs: requested }))
         .rejects.toMatchObject({ code: "timeout" });
       await vi.advanceTimersByTimeAsync(effective - 1);
       expect(signal?.aborted).toBe(false);
@@ -410,7 +415,7 @@ describe("model-bound OpenRouter player", () => {
   it.each([0, AI_MAX_DECISION_TIME_MS + 1, NaN, 1.5])("rejects an invalid per-call timeout before contacting the provider", async (timeoutMs) => {
     const fetcher = vi.fn<typeof fetch>();
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await expect(client.decide({ modelId, observation: observation(), memory: "", timeoutMs }))
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: observation(), memory: "", timeoutMs }))
       .rejects.toMatchObject({ code: "configuration" });
     expect(fetcher).not.toHaveBeenCalled();
   });
@@ -424,7 +429,7 @@ describe("model-bound OpenRouter player", () => {
         return await new Promise<Response>(() => undefined);
       });
       const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-      const waiting = expect(client.decide({ modelId, observation: observation(), memory: "" }))
+      const waiting = expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: observation(), memory: "" }))
         .rejects.toMatchObject({ code: "timeout" });
       expect(AI_MAX_DECISION_TIME_MS).toBe(20_000);
       await vi.advanceTimersByTimeAsync(AI_MAX_DECISION_TIME_MS - 1);
@@ -442,19 +447,221 @@ describe("model-bound OpenRouter player", () => {
       return await new Promise<Response>(() => undefined);
     });
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    const pending = client.decide({ modelId, observation: observation(), memory: "" });
+    const pending = client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: observation(), memory: "" });
     const cancelled = expect(pending).rejects.toMatchObject({ code: "cancelled" });
     client.cancelAll();
     await cancelled;
     expect(signal?.aborted).toBe(true);
     fetcher.mockImplementation(async () => jsonResponse(providerBody()));
-    await expect(client.decide({ modelId, observation: observation(), memory: "" })).resolves.toMatchObject({ modelId });
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId, observation: observation(), memory: "" })).resolves.toMatchObject({ modelId });
   });
 
   it.each(["openrouter/auto", "~example/model-latest", "example/model:nitro", "not-a-model-id"])("rejects model routers and invalid bindings", async (invalidModel) => {
     const fetcher = vi.fn<typeof fetch>();
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await expect(client.decide({ modelId: invalidModel, observation: observation(), memory: "" })).rejects.toMatchObject({ code: "configuration" });
+    await expect(client.decide({ protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, modelId: invalidModel, observation: observation(), memory: "" })).rejects.toMatchObject({ code: "configuration" });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+function winningObservation(size: 13 | 14 = 14): AiAgentObservation {
+  const view = observation();
+  view.hand = structuredClone(size === 14 ? missedWinHand14 : missedWinHand13);
+  view.state.wildRank = missedWinWildRank;
+  view.state.players[0]!.cardCount = size;
+  return view;
+}
+function winningFacts(): AiGameRulesFacts {
+  return {
+    rulesRevision: AI_GAME_RULES_REVISION, toolVersion: AI_GAME_RULES_TOOL_VERSION,
+    status: "complete", readyHand: null, immediateDeclaration: structuredClone(missedWinDeclaration)
+  };
+}
+function winningDecision(): AiAgentDecision {
+  return decision({ action: "declare", cardId: missedWinDeclaration.cardId, groups: structuredClone(missedWinDeclaration.groups) });
+}
+
+describe("v2 model-controlled winning protocol", () => {
+  it("defaults to the current immutable protocol and treats missing rules checks as unknown", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody()));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await client.decide({ modelId, observation: observation(), memory: "Only old-match notes." });
+    const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+    expect(body.messages[0].content).toBe(buildSystemPrompt());
+    const envelope = JSON.parse(body.messages[1].content);
+    expect(envelope.protocol).toEqual({ id: AI_GAME_PROTOCOL_IDENTITY_VERSION, version: AI_GAME_PROTOCOL_VERSION,
+      rulesRevision: AI_GAME_RULES_REVISION, policyHash: AI_GAME_PROTOCOL_REVISION_HASH });
+    expect(envelope.rulesFacts).toEqual({ rulesRevision: AI_GAME_RULES_REVISION, toolVersion: AI_GAME_RULES_TOOL_VERSION,
+      status: "unavailable", reason: "tool-error", immediateDeclaration: null, readyHand: null });
+    expect(body.response_format.json_schema.schema.required).toEqual(["action", "cardId", "groups", "memory"]);
+    expect(body.model).toBe(modelId); expect(body).not.toHaveProperty("models");
+    expect(body.max_tokens).toBe(AI_MAX_OUTPUT_TOKENS);
+    expect(Buffer.byteLength(String(fetcher.mock.calls[0]![1]?.body))).toBeLessThanOrEqual(AI_MAX_REQUEST_BYTES);
+  });
+
+  it("rejects unknown protocol IDs before contacting a model", async () => {
+    const fetcher = vi.fn<typeof fetch>(); const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    for (const protocolId of ["trinity-agent-protocol/999", "trinity-v1:unrecognized", AI_GAME_PROTOCOL_VERSION]) {
+      await expect(client.decide({ modelId, observation: observation(), memory: "", protocolId })).rejects.toMatchObject({ code: "configuration" });
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("validates the real missed102-point win, narrows to declare, and still requires the exact model response", async () => {
+    const selected = "anthropic/claude-haiku-5.5";
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(winningDecision(), { model: selected })));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    const result = await client.decide({ modelId: selected, observation: winningObservation(), memory: "Try to improve points.", rulesFacts: winningFacts() });
+    expect(result.decision).toEqual(winningDecision());
+    expect(validateDeclaration(missedWinHand14, result.decision.cardId!, result.decision.groups, missedWinWildRank))
+      .toMatchObject({ valid: true, score: 102, meldTotals: [21, 27, 27, 27] });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body)); const schema = body.response_format.json_schema.schema;
+    expect(schema.properties.action.enum).toEqual(["declare"]);
+    expect(schema.properties.cardId.type).toBe("string");
+    expect(schema.properties.cardId.enum).toEqual(missedWinHand14.map(({ id }) => id));
+    expect(schema.properties.groups).toMatchObject({ minItems: 1, maxItems: 14, items: { minItems: 3, maxItems: 14 } });
+    expect(JSON.parse(body.messages[1].content).rulesFacts).toEqual(winningFacts());
+    fetcher.mockImplementation(async () => jsonResponse(providerBody(winningDecision(), { model: "different/model" })));
+    await expect(client.decide({ modelId: selected, observation: winningObservation(), memory: "", rulesFacts: winningFacts() })).rejects.toMatchObject({ code: "model-mismatch" });
+  });
+
+  it("rejects a missed winning declaration with bounded action and usage, never auto-executing the supplied plan", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision({ action: "discard", cardId: missedWinDeclaration.cardId }))));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await expect(client.decide({ modelId, observation: winningObservation(), memory: "Wait for higher points.", rulesFacts: winningFacts() }))
+      .rejects.toMatchObject({ code: "missed-declaration", metadata: { action: "discard", finishReason: "stop", usage: { costUsd: 0.0015 } } });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a model-chosen alternative immediate valid partition without replacing it with the candidate", async () => {
+    const chosen = winningDecision(); chosen.groups.reverse(); chosen.groups[0]!.reverse();
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(chosen)));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    const result = await client.decide({ modelId, observation: winningObservation(), memory: "", rulesFacts: winningFacts() });
+    expect(result.decision).toEqual(chosen); expect(result.decision.groups).not.toEqual(missedWinDeclaration.groups);
+  });
+
+  it("preflights illegal v2 declarations even when the rules tool is unavailable", async () => {
+    const view = drawnObservation(); const chosen = decision({ action: "declare", cardId: "own-13", groups: [view.hand.slice(0, 13).map(({ id }) => id)] });
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(chosen)));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await expect(client.decide({ modelId, observation: view, memory: "" })).rejects.toMatchObject({
+      code: "invalid-declaration", metadata: { action: "declare", usage: { costUsd: 0.0015 } }
+    });
+    const acceptedLegacy = await client.decide({ modelId, observation: view, memory: "", protocolId: AI_LEGACY_V1_PROTOCOL_VERSION });
+    expect(acceptedLegacy.decision).toEqual(chosen);
+  });
+
+  it("preserves a ready13-card hand as draw-only, and allows only a visible discard preview", async () => {
+    const view = winningObservation(13); view.state.topDiscard = structuredClone(missedWinHand14[13]!);
+    const facts: AiGameRulesFacts = { rulesRevision: AI_GAME_RULES_REVISION, toolVersion: AI_GAME_RULES_TOOL_VERSION, status: "complete",
+      immediateDeclaration: null, readyHand: { groups: structuredClone(missedWinDeclaration.groups), score: 102 }, afterDiscardDraw: structuredClone(missedWinDeclaration) };
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision({ action: "draw-discard" }))));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    const result = await client.decide({ modelId, observation: view, memory: "", rulesFacts: facts });
+    expect(result.decision.action).toBe("draw-discard");
+    const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+    expect(body.response_format.json_schema.schema.properties.action.enum).toEqual(["draw-stock", "draw-discard"]);
+    expect(body.response_format.json_schema.schema.properties.cardId.type).toEqual(["string", "null"]);
+    expect(JSON.parse(body.messages[1].content).rulesFacts).toEqual(facts);
+    view.state.topDiscard = null;
+    await expect(client.decide({ modelId, observation: view, memory: "", rulesFacts: facts })).rejects.toMatchObject({ code: "invalid-rules-facts" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["unowned", "wrong-score", "duplicates", "wrong-rules", "wrong-tool", "wrong-stage", "unavailable-proof", "private-fields"])(
+    "never forwards an invalid rules proof: %s", async (kind) => {
+      const facts = structuredClone(winningFacts()) as any; const view = winningObservation();
+      if (kind === "unowned") facts.immediateDeclaration.groups[0][0] = "PRIVATE_OPPONENT_CARD";
+      if (kind === "wrong-score") facts.immediateDeclaration.score = 103;
+      if (kind === "duplicates") facts.immediateDeclaration.groups[0][1] = facts.immediateDeclaration.groups[0][0];
+      if (kind === "wrong-rules") facts.rulesRevision = "trinity-rules/other";
+      if (kind === "wrong-tool") facts.toolVersion = "other/tool";
+      if (kind === "wrong-stage") view.hand = view.hand.slice(0, 13);
+      if (kind === "unavailable-proof") facts.status = "unavailable";
+      if (kind === "private-fields") facts.opponentsHands = [{ playerId: otherId, cards: ["PRIVATE_CARD"] }];
+      const fetcher = vi.fn<typeof fetch>(); const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+      await expect(client.decide({ modelId, observation: view, memory: "", rulesFacts: facts })).rejects.toMatchObject({ code: "invalid-rules-facts" });
+      expect(fetcher).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps unavailable facts unknown and does not narrow an ordinary discard to declare", async () => {
+    const view = drawnObservation();
+    const facts: AiGameRulesFacts = { rulesRevision: AI_GAME_RULES_REVISION, toolVersion: AI_GAME_RULES_TOOL_VERSION,
+      status: "unavailable", reason: "time-budget", immediateDeclaration: null, readyHand: null };
+    const chosen = decision({ action: "discard", cardId: "own-13" });
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(chosen)));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    expect((await client.decide({ modelId, observation: view, memory: "", rulesFacts: facts })).decision).toEqual(chosen);
+    const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+    expect(body.response_format.json_schema.schema.properties.action.enum).toEqual(["discard", "declare"]);
+    expect(JSON.parse(body.messages[1].content).rulesFacts.status).toBe("unavailable");
+  });
+
+  it.each(["wrong-score", "foreign-id", "wrong-hand-size"])("revalidates a13-card readiness proof: %s", async (kind) => {
+    const view = winningObservation(13);
+    const facts = { rulesRevision: AI_GAME_RULES_REVISION, toolVersion: AI_GAME_RULES_TOOL_VERSION, status: "complete" as const,
+      immediateDeclaration: null, readyHand: { groups: structuredClone(missedWinDeclaration.groups), score: 102 } } satisfies AiGameRulesFacts;
+    if (kind === "wrong-score") facts.readyHand.score = 101;
+    if (kind === "foreign-id") facts.readyHand.groups[0]![0] = "PRIVATE_FOREIGN_CARD";
+    if (kind === "wrong-hand-size") view.hand = structuredClone(missedWinHand14);
+    const fetcher = vi.fn<typeof fetch>(); const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await expect(client.decide({ modelId, observation: view, memory: "", rulesFacts: facts })).rejects.toMatchObject({ code: "invalid-rules-facts" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("rejects stale wild-rank proofs and previews with anything beyond owned cards plus the visible discard", async () => {
+    const fetcher = vi.fn<typeof fetch>(); const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    const changed = winningObservation(); changed.state.wildRank = 6;
+    await expect(client.decide({ modelId, observation: changed, memory: "", rulesFacts: winningFacts() })).rejects.toMatchObject({ code: "invalid-rules-facts" });
+    const view = winningObservation(13); view.state.topDiscard = structuredClone(missedWinHand14[13]!);
+    const preview = structuredClone(missedWinDeclaration); preview.groups[0]![0] = "UNSEEN_STOCK_CARD";
+    const facts: AiGameRulesFacts = { rulesRevision: AI_GAME_RULES_REVISION, toolVersion: AI_GAME_RULES_TOOL_VERSION,
+      status: "complete", immediateDeclaration: null, readyHand: null, afterDiscardDraw: preview };
+    await expect(client.decide({ modelId, observation: view, memory: "", rulesFacts: facts })).rejects.toMatchObject({ code: "invalid-rules-facts" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("counts the v2 prompt, protocol and rules facts inside the same24KB request cap", async () => {
+    const fetcher = vi.fn<typeof fetch>(); const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    const view = winningObservation(); view.publicHistory = Array.from({ length: 20 }, () => "x".repeat(900));
+    await expect(client.decide({ modelId, observation: view, memory: "m".repeat(4000), rulesFacts: winningFacts() })).rejects.toMatchObject({ code: "request-too-large" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("preserves showdown-only submission instead of turning a ready final hand into a declaration", async () => {
+    const view = winningObservation(13); view.state.phase = "showdown";
+    view.state.showdown = { declarerId: otherId, pendingPlayerIds: [playerId], submittedPlayerIds: [], endsAt: Date.now() + 45000 };
+    const facts: AiGameRulesFacts = { rulesRevision: AI_GAME_RULES_REVISION, toolVersion: AI_GAME_RULES_TOOL_VERSION,
+      status: "complete", immediateDeclaration: null, readyHand: { groups: structuredClone(missedWinDeclaration.groups), score: 102 } };
+    const chosen = decision({ action: "submit-hand", groups: structuredClone(missedWinDeclaration.groups) });
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(chosen)));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    expect((await client.decide({ modelId, observation: view, memory: "", rulesFacts: facts })).decision).toEqual(chosen);
+    const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+    expect(body.response_format.json_schema.schema.properties.action.enum).toEqual(["submit-hand"]);
+  });
+
+  it("preserves Gemini's portable schema while requiring its selected model to declare", async () => {
+    const selected = "google/gemini-3.8-flash";
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(winningDecision(), { model: selected })));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await client.decide({ modelId: selected, observation: winningObservation(), memory: "", rulesFacts: winningFacts() });
+    const schema = JSON.parse(String(fetcher.mock.calls[0]![1]?.body)).response_format.json_schema.schema;
+    expect(schema.properties.action.enum).toEqual(["declare"]);
+    expect(schema.properties.cardId.enum).toEqual(missedWinHand14.map(({ id }) => id));
+    expect(JSON.stringify(schema)).not.toMatch(/minItems|maxItems/);
+  });
+
+  it("keeps legacy request bodies completely free of v2 facts and metadata", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision({ action: "discard", cardId: missedWinDeclaration.cardId }))));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher }); const view = winningObservation();
+    await client.decide({ modelId, observation: view, memory: "legacy", protocolId: AI_LEGACY_V1_PROTOCOL_VERSION, rulesFacts: winningFacts() });
+    const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+    expect(body.messages[0].content).toBe(AI_LEGACY_V1_SYSTEM_PROMPT);
+    expect(JSON.parse(body.messages[1].content)).toEqual({ observation: view, memory: "legacy" });
+    expect(body.response_format.json_schema.schema.properties.action.enum).toEqual(["discard", "declare"]);
   });
 });
