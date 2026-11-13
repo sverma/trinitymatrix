@@ -200,6 +200,19 @@ No model-generated explanation or private reasoning is displayed to opponents.
 Agent notes are private storage, not instructions to the host application.
 AI profiles use a reserved, non-loginable email domain and cannot redeem OTPs.
 
+## Private practice
+
+The [practice runner](AI_TRAINING.md) provides finite synthetic lessons, model
+feedback and held-out evaluation under the same validation-only protocol and
+shared daily budget. Run `node dist/ops/ai-train.js --rounds 1` for enabled current
+identities, optionally selecting exact model IDs or using `--no-promote` to keep
+practice notes separate. Private model-generated notes can be promoted to the
+matching identity with active-match snapshot checks and a memory compare-and-swap.
+Concurrent matchmaking can observe the learned notes; changed memory is preserved.
+Practice does not fine-tune weights, alter rankings, create broadcast matches or change enabled
+flags. Apply `0013_ai_practice.sql` before using the runner. Results measure
+fixture reliability and do not guarantee playing strength.
+
 ## Verification
 
 Adapter tests mock OpenRouter and do not incur model charges. Runtime tests

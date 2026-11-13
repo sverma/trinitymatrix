@@ -68,11 +68,14 @@ jobs:
       - name: Run isolated AI and broadcast persistence tests
         env:
           AI_RATINGS_TEST_DATABASE_URL: postgresql://trinitymatrix:trinitymatrix@127.0.0.1:5433/trinity_ai_test
+          AI_PRACTICE_TEST_REDIS_URL: redis://127.0.0.1:6379
         run: |
           node --input-type=module -e "import pg from 'pg'; const c=new pg.Client({connectionString:'postgresql://trinitymatrix:trinitymatrix@127.0.0.1:5433/trinitymatrix'}); await c.connect(); await c.query('CREATE DATABASE trinity_ai_test'); await c.end();"
           # Separate invocations avoid competing for the global migration lock.
           npm run test -w @trinitymatrix/server -- src/db/ai-ratings.integration.test.ts
           npm run test -w @trinitymatrix/server -- src/db/ai-protocol.integration.test.ts
+          npm run test -w @trinitymatrix/server -- src/db/ai-practice.integration.test.ts
+          npm run test -w @trinitymatrix/server -- src/ai-practice-promotion.integration.test.ts
           npm run test -w @trinitymatrix/server -- src/broadcast.integration.test.ts
 
       - name: Run load harness safety tests

@@ -49,6 +49,28 @@ function setup(decide = vi.fn(async (input: Input) => selected(input))) {
 describe("operator full-turn model qualification", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("supports explicit fixture-local practice data and accepted-memory callbacks without saving profile memory", async () => {
+    const { ledger, decide, createClient } = setup(); const onMemory = vi.fn();
+    const report = await qualifyAiModel({ identity: { ...identity, protocolId: AI_VALIDATION_IDENTITY_VERSION },
+      ledger, createClient, dailyBudgetUsd: 10, turns: 1, initialMemory: "PRIVATE_PRACTICE_NOTE",
+      memoryPrefix: "SYNTHETIC_PAST_EXAMPLES_DATA", onMemory });
+    expect(report.status).toBe("passed");
+    expect(decide.mock.calls[0]![0].memory).toBe("SYNTHETIC_PAST_EXAMPLES_DATA\nPRIVATE_PRACTICE_NOTE");
+    expect(decide.mock.calls[1]![0].memory).toBe("SYNTHETIC_PAST_EXAMPLES_DATA\nFixture-local note");
+    expect(onMemory).toHaveBeenCalledTimes(2);
+    expect(onMemory.mock.calls[0]![1].hand).toHaveLength(13);
+    expect(ledger.saveMemory).not.toHaveBeenCalled();
+    expect(JSON.stringify(report)).not.toContain("PRIVATE_PRACTICE_NOTE");
+  });
+
+  it("keeps optional memory prefix and model notes within the same 4000-character input bound", async () => {
+    const { ledger, decide, createClient } = setup();
+    await qualifyAiModel({ identity: { ...identity, protocolId: AI_VALIDATION_IDENTITY_VERSION },
+      ledger, createClient, dailyBudgetUsd: 10, turns: 1, initialMemory: "n".repeat(4000), memoryPrefix: "p".repeat(3900) });
+    expect(decide.mock.calls.every(([input]) => input.memory.length <= 4000)).toBe(true);
+    await expect(qualifyAiModel({ identity, ledger, createClient, dailyBudgetUsd: 10, initialMemory: "n".repeat(4001) })).rejects.toThrow("memory");
+  });
+
   it("accepts a v3 missed win as model performance without searching or correcting it", async () => {
     const { ledger, decide, createClient } = setup();
     const compute = vi.fn(() => { throw new Error("V3 cannot search"); });

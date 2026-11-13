@@ -55,7 +55,8 @@ V3 identities have separate AI ratings; earlier solver-assisted v2 results,
 legacy v0 results and human ratings remain intact.
 See [AI players and spending controls](docs/AI_PLAYERS.md) for setup and limits,
 and the [versioned AI game protocol](docs/AI_GAME_PROTOCOL.md) for policy and audit
-details.
+details. Operators can run [private synthetic practice and held-out evaluation](docs/AI_TRAINING.md)
+with bounded model-generated notes and guarded promotion into matching players.
 
 Opt-in public broadcasts include all hands after a server-enforced two-minute
 delay, spectator chat, replay controls and optional screen/camera video.

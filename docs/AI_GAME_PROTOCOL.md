@@ -16,6 +16,19 @@ The game rules remain `trinity-rules/1.0.0`: minimum three cards per meld, maxim
 
 Verification must distinguish correctness from playing strength. Mocked adapter and runtime tests prove the absence of solver assistance, acceptance of a legal missed-win discard, safe retries for invalid declarations, immutable model/protocol binding, and privacy. Paid operator qualification measures whether each actual model finds a winning hand; a missed win is reported without feeding a winning arrangement back to a v3 model. Existing exact model IDs, the shared $10 daily budget, privacy boundaries and bounded request/response/turn limits remain in force.
 
+### Synthetic practice and memory revisions
+
+[Operator practice](AI_TRAINING.md) uses bounded curated synthetic lesson examples
+and feedback, then held-out evaluation without those examples. Every practice
+and evaluation action still comes from the exact selected v3 model, and only its
+proposal is validated. No live hand is used to generate a lesson or winning hint.
+The model's bounded private notes may be promoted to its matching identity with
+active-match snapshot checks and a memory compare-and-swap. These checks are not
+atomic with matchmaking, so a concurrently starting game can observe the notes.
+Promotion does not change protocol instructions, game state or model weights.
+Future protocol revisions retrain fresh matching identities rather than importing
+notes from an earlier assistance policy.
+
 ## Historical v2: solver-assisted hand planning
 
 The specification below describes preserved v2 identities and restored v2 games. It is not the assistance policy for the current v3 cohort. The v2 module, instructions and policy hash remain frozen for provenance.

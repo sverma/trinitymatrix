@@ -12,7 +12,7 @@ import { missedWinHand14, missedWinWildRank } from "./ai-missed-win.fixture";
 import { AI_VALIDATION_IDENTITY_VERSION, AI_VALIDATION_TOOL_VERSION } from "./ai-game-protocol-v3";
 import { validateAiProposal } from "./ai-proposal-validation";
 
-type QualificationClient = {
+export type QualificationClient = {
   decide(input: { modelId: string; observation: AiAgentObservation; memory: string; protocolId: string; rulesFacts?: AiGameRulesFacts }): Promise<AiAgentDecisionResult>;
   cancelAll(): void;
 };
@@ -117,11 +117,18 @@ export async function qualifyAiModel(options: {
   rulesTools?: Pick<AiRuleToolService, "compute">;
   createClient: (timeoutMs: number) => QualificationClient;
   createGame?: (identity: AiIdentity, syntheticHumanId: string) => RankingGame;
+  /** Optional fixture-local data for practice; never reads or saves profile memory. */
+  initialMemory?: string;
+  memoryPrefix?: string;
+  onMemory?: (memory: string, observation: AiAgentObservation) => void;
 }): Promise<AiQualificationReport> {
   const turns = options.turns ?? (options.scenario === "winning-hand" ? 1 : 10);
   if (!Number.isInteger(turns) || turns < 1 || turns > 10) throw new Error("Qualification turns must be an integer from 1 through 10.");
   if (!Number.isFinite(options.dailyBudgetUsd) || options.dailyBudgetUsd <= 0 || options.dailyBudgetUsd > 10) {
     throw new Error("The shared daily qualification budget must be positive and at most USD 10.");
+  }
+  for (const memory of [options.initialMemory, options.memoryPrefix]) {
+    if (memory !== undefined && (typeof memory !== "string" || memory.length > 4_000)) throw new Error("Fixture memory must be bounded text.");
   }
   const { identity, ledger } = options;
   const protocolId = identity.protocolId ?? AI_LEGACY_V1_PROTOCOL_VERSION;
@@ -145,7 +152,7 @@ export async function qualifyAiModel(options: {
   let syntheticHumanId = randomUUID();
   const createGame = options.createGame ?? (scenario === "winning-hand" ? winningQualificationGame : qualificationGame);
   let game = createGame(identity, syntheticHumanId);
-  let memory = "";
+  let memory = options.initialMemory ?? "";
   let publicHistory: string[] = [];
   let feedback = "";
 
@@ -206,7 +213,10 @@ export async function qualifyAiModel(options: {
       const started = Date.now();
       let result: AiAgentDecisionResult;
       try {
-        result = await client.decide({ modelId: identity.modelId, observation, memory, protocolId, ...(rulesFacts ? { rulesFacts } : {}) });
+        const requestMemory = options.memoryPrefix
+          ? `${options.memoryPrefix}\n${memory.slice(0, Math.max(0, 3_999 - options.memoryPrefix.length))}`.slice(0, 4_000)
+          : memory;
+        result = await client.decide({ modelId: identity.modelId, observation, memory: requestMemory, protocolId, ...(rulesFacts ? { rulesFacts } : {}) });
         report.maxLatencyMs = Math.max(report.maxLatencyMs, Date.now() - started);
       } catch (error) {
         report.maxLatencyMs = Math.max(report.maxLatencyMs, Date.now() - started);
@@ -295,6 +305,7 @@ export async function qualifyAiModel(options: {
         report.validDeclarations += 1;
       }
       memory = result.decision.memory;
+      options.onMemory?.(memory, observation);
       const action = result.decision.action;
       if (action === "draw-stock" || action === "draw-discard") report.draws += 1;
       if (action === "discard") { report.discards += 1; turnComplete = true; }
