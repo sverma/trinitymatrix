@@ -31,6 +31,20 @@ function mockArena(roster: AiPlayerRoster = { enabled: true, players: agents, da
 afterEach(() => vi.unstubAllGlobals());
 
 describe("AI opponent selection", () => {
+  it("shows the protocol revision without exposing its full audit hash or changing selection identity", async () => {
+    const user = userEvent.setup(); const agent = { ...agents[0]!, displayName: "Agent 1 · v2", protocolVersion: "trinity-agent-protocol/2.0.0",
+      protocolId: `trinity-agent-protocol/2.0.0:${"a".repeat(64)}`, protocolHash: "a".repeat(64), rulesRevision: "trinity-rules/1.0.0" };
+    const fetchMock = mockArena({ enabled: true, players: [agent], dailyBudgetUsd: 10 });
+    render(<AiPlayers connected privateTableOpen={false} />);
+    expect(await screen.findByText("AI protocol v2.0.0")).toBeInTheDocument();
+    expect(screen.getByText(/fresh AI ratings/)).toHaveTextContent("Earlier results remain in history");
+    expect(screen.queryByText(agent.protocolId)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Select Agent 1 · v2" }));
+    await user.click(screen.getByRole("button", { name: "Play against selected AI" }));
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(String(post[1]?.body))).toEqual({ agentIds: [agent.id] });
+  });
+
   it("shows exact model identities and starts only the selected available opponent", async () => {
     const user = userEvent.setup();
     const fetchMock = mockArena();
@@ -38,6 +52,7 @@ describe("AI opponent selection", () => {
 
     const first = await screen.findByRole("radio", { name: "Select Agent 1" });
     expect(screen.getByText("provider/model-1")).toBeInTheDocument();
+    expect(screen.queryByText(/AI protocol/)).not.toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Select Agent 6" })).toBeDisabled();
     expect(screen.getByText("Already at a table")).toBeInTheDocument();
     expect(screen.getByText(/\$10\.00 daily AI spending limit/)).toBeInTheDocument();

@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PostGameChatCipher } from "./chat-crypto";
 import { runMigrations } from "./migrate";
 import { PostgresApplicationRepository } from "./repository";
-import { AI_PROMPT_VERSION, aiIdentityId, INITIAL_AI_ROSTER, PostgresAiStore } from "../ai-repository";
+import { AI_CURRENT_IDENTITY_VERSION, AI_PROMPT_VERSION, aiIdentityId, INITIAL_AI_ROSTER, PostgresAiStore } from "../ai-repository";
 
 const databaseUrl = process.env.AI_RATINGS_TEST_DATABASE_URL;
 
@@ -42,7 +42,7 @@ describe.skipIf(!databaseUrl)("model-bound identities and composition ratings in
       "INSERT INTO player_rankings (user_id, rating, games_played, wins, losses) VALUES ($1, 1250, 4, 3, 1)",
       [legacyId]
     );
-    await runMigrations(pool, [...previous, migration("0008_model_bound_ai_players.sql")]);
+    await runMigrations(pool, [...previous, migration("0008_model_bound_ai_players.sql"), migration("0009_live_broadcasts.sql"), migration("0010_ai_protocol_provenance.sql")]);
     repository = new PostgresApplicationRepository(pool, new PostGameChatCipher(Buffer.alloc(32, 9).toString("base64"), 1));
     for (const [index, id] of humanIds.entries()) {
       await repository.upsertUserProfile({
@@ -143,6 +143,8 @@ describe.skipIf(!databaseUrl)("model-bound identities and composition ratings in
     const retiredModelId = "deepseek/deepseek-v4.1-flash-1017";
     const retiredId = aiIdentityId(retiredModelId);
     const disabledId = aiIdentityId("deepseek/deepseek-v3.2");
+    const suspendedId = aiIdentityId("qwen/qwen3.8-flash");
+    const latestDisabledModel = "mistralai/mistral-small-2603";
     for (const configured of [...inheritedRoster, {
       modelId: retiredModelId, modelName: "Retired DeepSeek Flash", displayName: "Retired Flash AI"
     }]) {
@@ -158,6 +160,13 @@ describe.skipIf(!databaseUrl)("model-bound identities and composition ratings in
         [userId]
       );
     }
+    await pool!.query("UPDATE app_users SET suspended_at=clock_timestamp(),suspension_reason='Disabled legacy model' WHERE id=$1", [suspendedId]);
+    // A later operator-disabled cohort must take precedence over an older
+    // enabled v1 row on future upgrades, without changing either old identity.
+    const predecessorId = aiIdentityId(latestDisabledModel, "historical-protocol-cohort");
+    await pool!.query("INSERT INTO app_users(id,email,actor_kind) VALUES($1,$2,'ai')", [predecessorId, `agent-${predecessorId}@ai.trinitymatrix.invalid`]);
+    await pool!.query("INSERT INTO player_profiles(user_id,display_name) VALUES($1,'Older model cohort')", [predecessorId]);
+    await pool!.query("INSERT INTO ai_agents(user_id,model_id,model_name,prompt_version,enabled) VALUES($1,$2,'Mistral','historical-protocol-cohort',false)", [predecessorId, latestDisabledModel]);
     const existingIds = [...inheritedRoster.map(({ modelId }) => aiIdentityId(modelId)), retiredId];
     const existingState = () => pool!.query(
       `SELECT a.user_id, a.model_id, a.model_name, a.prompt_version, a.memory, a.enabled,
@@ -169,7 +178,7 @@ describe.skipIf(!databaseUrl)("model-bound identities and composition ratings in
     const originalState = (await existingState()).rows;
     await store.provision();
     expect((await existingState()).rows).toEqual(originalState);
-    const id = aiIdentityId(INITIAL_AI_ROSTER[0].modelId);
+    const id = aiIdentityId(INITIAL_AI_ROSTER[0].modelId, AI_CURRENT_IDENTITY_VERSION);
     await store.saveMemory(id, "Use only observed public moves; remember the last match's strategy.");
     const updatedState = (await existingState()).rows;
     await store.provision();
@@ -179,29 +188,54 @@ describe.skipIf(!databaseUrl)("model-bound identities and composition ratings in
     expect(agents).toHaveLength(INITIAL_AI_ROSTER.length);
     expect(agents.some(({ id: candidate }) => candidate === retiredId)).toBe(false);
     for (const configured of INITIAL_AI_ROSTER) {
-      expect(agents.filter(({ id: candidate }) => candidate === aiIdentityId(configured.modelId))).toHaveLength(1);
-      expect(agents.find(({ id: candidate }) => candidate === aiIdentityId(configured.modelId)))
-        .toMatchObject({ modelId: configured.modelId, modelName: configured.modelName, enabled: aiIdentityId(configured.modelId) !== disabledId });
-      if (newModelIds.has(configured.modelId)) {
-        expect(agents.find(({ id: candidate }) => candidate === aiIdentityId(configured.modelId)))
-          .toMatchObject({ displayName: configured.displayName, memory: "", rating: 1000, gamesPlayed: 0, wins: 0 });
-      }
+      const currentId = aiIdentityId(configured.modelId, AI_CURRENT_IDENTITY_VERSION);
+      expect(agents.filter(({ id: candidate }) => candidate === currentId)).toHaveLength(1);
+      expect(agents.find(({ id: candidate }) => candidate === currentId))
+        .toMatchObject({ modelId: configured.modelId, modelName: configured.modelName, enabled: ![disabledId, suspendedId].includes(aiIdentityId(configured.modelId)) && configured.modelId !== latestDisabledModel,
+          protocolId: AI_CURRENT_IDENTITY_VERSION, identityVersion: AI_CURRENT_IDENTITY_VERSION, selectable: true,
+          displayName: `${configured.displayName} · v2`, rating: 1000, gamesPlayed: 0, wins: 0 });
+      if (currentId !== id) expect(agents.find(({ id: candidate }) => candidate === currentId)?.memory).toBe("");
     }
     expect(agents.find(({ id: candidate }) => candidate === id)?.memory)
       .toBe("Use only observed public moves; remember the last match's strategy.");
-    expect(agents.find(({ id: candidate }) => candidate === disabledId))
-      .toMatchObject({ enabled: false, rating: 1234, gamesPlayed: 4, wins: 3 });
+    expect(agents.find(({ id: candidate }) => candidate === aiIdentityId("deepseek/deepseek-v3.2", AI_CURRENT_IDENTITY_VERSION)))
+      .toMatchObject({ enabled: false, rating: 1000, gamesPlayed: 0, wins: 0 });
+    const currentDisabledId = aiIdentityId(INITIAL_AI_ROSTER[1].modelId, AI_CURRENT_IDENTITY_VERSION);
+    await pool!.query("UPDATE ai_agents SET enabled=false WHERE user_id=$1", [currentDisabledId]);
+    await store.provision();
+    expect((await store.listAgents()).find(({ id: candidate }) => candidate === currentDisabledId)?.enabled).toBe(false);
     expect(aiIdentityId("deepseek/deepseek-v4.1-flash")).not.toBe(retiredId);
     expect(aiIdentityId(INITIAL_AI_ROSTER[0].modelId)).not.toBe(aiIdentityId(INITIAL_AI_ROSTER[1].modelId));
     await expect(store.saveMemory(id, "x".repeat(4001))).rejects.toThrow("too long");
   });
 
+  it("keeps legacy workers only for active matches and never admits them as new opponents", async () => {
+    const store = new PostgresAiStore(pool!);
+    const legacyId = aiIdentityId(INITIAL_AI_ROSTER[0].modelId);
+    const legacyDisabledId = aiIdentityId("deepseek/deepseek-v3.2");
+    const matches: string[] = [];
+    for (const oldId of [legacyId, legacyDisabledId]) {
+      const matchId = randomUUID(); matches.push(matchId);
+      await repository.createMatch({ id: matchId, publicName: `legacy-recovery-${matches.length === 1 ? "12345671" : "12345672"}`, playerCount: 2, startedAt,
+        participants: [{ userId: oldId, seatNumber: 0, displayName: "Legacy AI", badgeId: "strategist" }, { userId: humanIds[0]!, seatNumber: 1, displayName: "Human", badgeId: "rookie" }] });
+    }
+    const runtime = await store.listAgents();
+    expect(runtime.filter(({ selectable }) => selectable)).toHaveLength(INITIAL_AI_ROSTER.length);
+    expect(runtime.find(({ id }) => id === legacyId)).toMatchObject({ protocolId: AI_PROMPT_VERSION, identityVersion: AI_PROMPT_VERSION, selectable: false, enabled: true });
+    expect(runtime.find(({ id }) => id === legacyDisabledId)).toMatchObject({ protocolId: AI_PROMPT_VERSION, selectable: false, enabled: false });
+    expect(runtime.find(({ id }) => id === aiIdentityId(INITIAL_AI_ROSTER[0].modelId, AI_CURRENT_IDENTITY_VERSION)))
+      .toMatchObject({ protocolId: AI_CURRENT_IDENTITY_VERSION, selectable: true });
+    await pool!.query("UPDATE ranking_matches SET status='abandoned',end_reason='cancelled',ended_at=clock_timestamp() WHERE id=ANY($1::uuid[])", [matches]);
+    const retired = await store.listAgents();
+    expect(retired.some(({ id }) => id === legacyId || id === legacyDisabledId)).toBe(false);
+  });
+
   it("atomically enforces one shared daily budget across parallel agents and keeps unknown failed costs reserved", async () => {
     const store = new PostgresAiStore(pool!);
-    const id = aiIdentityId(INITIAL_AI_ROSTER[0].modelId);
+    const id = aiIdentityId(INITIAL_AI_ROSTER[0].modelId, AI_CURRENT_IDENTITY_VERSION);
     const attempts = await Promise.all(Array.from({ length: 12 }, (_, index) => {
       const configured = INITIAL_AI_ROSTER[index % INITIAL_AI_ROSTER.length]!;
-      return store.reserveRequest(aiIdentityId(configured.modelId), configured.modelId, 0.10);
+      return store.reserveRequest(aiIdentityId(configured.modelId, AI_CURRENT_IDENTITY_VERSION), configured.modelId, 0.10);
     }));
     const accepted = attempts.filter((value): value is string => value !== null);
     expect(accepted).toHaveLength(2);
@@ -225,7 +259,7 @@ describe.skipIf(!databaseUrl)("model-bound identities and composition ratings in
     await pool!.query("UPDATE ai_model_requests SET budget_day=(clock_timestamp() AT TIME ZONE 'UTC')::date-1");
     expect(await store.budgetAvailable(0.10)).toBe(true);
     const configured = INITIAL_AI_ROSTER[0];
-    const id = aiIdentityId(configured.modelId);
+    const id = aiIdentityId(configured.modelId, AI_CURRENT_IDENTITY_VERSION);
     const request = await store.reserveRequest(id, configured.modelId, 0.10);
     expect(request).toBeTypeOf("string");
     const ledgerDate = await pool!.query(

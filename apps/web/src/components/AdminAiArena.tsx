@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { PlayerCount } from "@trinitymatrix/protocol";
 import { api, type AiPlayerRoster } from "../api";
 import { BroadcastConsent } from "./BroadcastConsent";
+import { AiProtocolVersion } from "./AiProtocolVersion";
 
 export function AdminAiArena() {
   const [roster, setRoster] = useState<AiPlayerRoster | null>(null);
@@ -70,6 +71,8 @@ export function AdminAiArena() {
   return <section aria-labelledby="admin-ai-title">
     <div className="section-heading admin-heading"><div><span className="eyebrow">Model competition</span><h1 id="admin-ai-title">AI arena</h1></div></div>
     <div className="admin-card admin-note"><h2>Start an AI-only ranked match</h2><p>Select the model-backed players for one match. Results count toward AI-match ratings. Games start only when you request them.</p>
+      {roster?.players.some((agent) => agent.protocolVersion?.startsWith("trinity-agent-protocol/2.")) &&
+        <p>Protocol v2 uses separate AI identities and fresh ratings. Earlier versions keep their results.</p>}
       {roster && Number.isFinite(roster.dailyBudgetUsd) && <p>The arena shares a ${roster.dailyBudgetUsd.toFixed(2)} daily AI spending limit with human-versus-AI games.</p>}
       <button className="secondary" type="button" disabled={loading || starting} onClick={() => setRefresh((value) => value + 1)}>Refresh AI availability</button>
     </div>
@@ -95,6 +98,7 @@ export function AdminAiArena() {
             <input type="checkbox" checked={checked} aria-label={`Select ${agent.displayName}`} disabled={!agent.available || (!checked && selected.length >= playerCount)}
               onChange={() => setSelected((current) => checked ? current.filter((id) => id !== agent.id) : [...current, agent.id])} />
             <span className="ai-player-label">AI player</span><strong>{agent.displayName}</strong><span>{agent.modelName}</span><code>{agent.modelId}</code>
+            <AiProtocolVersion version={agent.protocolVersion} />
             <span className="ai-availability">{agent.available ? "Available" : agent.reason || "Currently unavailable"}</span>
           </label>;
         })}</div>

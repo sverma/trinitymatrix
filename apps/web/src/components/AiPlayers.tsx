@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { PlayerCount } from "@trinitymatrix/protocol";
 import { api, type AiPlayerRoster } from "../api";
 import { BroadcastConsent } from "./BroadcastConsent";
+import { AiProtocolVersion } from "./AiProtocolVersion";
 
 export function AiPlayers({ connected, privateTableOpen }: { connected: boolean; privateTableOpen: boolean }) {
   const [roster, setRoster] = useState<AiPlayerRoster | null>(null);
@@ -71,6 +72,8 @@ export function AiPlayers({ connected, privateTableOpen }: { connected: boolean;
       <span className="eyebrow">Model-backed opponents</span>
       <h2 id="ai-players-title">Choose your AI players</h2>
       <p>Each player has a persistent identity tied to the model shown below. Your results here count toward mixed-match ratings.</p>
+      {roster?.players.some((agent) => agent.protocolVersion?.startsWith("trinity-agent-protocol/2.")) &&
+        <p>Protocol v2 players have fresh AI ratings and aim to declare at the first legal opportunity. Earlier results remain in history.</p>}
       <button type="button" className="secondary" disabled={loading || starting || created} onClick={() => setRefresh((value) => value + 1)}>Refresh availability</button>
     </div>
     {loading && <p className="ai-full-width" role="status">Loading AI players…</p>}
@@ -100,6 +103,7 @@ export function AiPlayers({ connected, privateTableOpen }: { connected: boolean;
                 <span className="ai-player-label">AI player</span>
                 <strong>{agent.displayName}</strong>
                 <span>{agent.modelName}</span>
+                <AiProtocolVersion version={agent.protocolVersion} />
                 <code>{agent.modelId}</code>
                 <small>{agent.rating} mixed rating · {agent.wins} wins · {agent.gamesPlayed} games</small>
                 <span className="ai-availability">{agent.available ? "Available" : agent.reason || "Currently unavailable"}</span>

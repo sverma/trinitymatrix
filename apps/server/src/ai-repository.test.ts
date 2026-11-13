@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AI_PROMPT_VERSION, INITIAL_AI_ROSTER, aiIdentityId } from "./ai-repository";
+import { AI_CURRENT_IDENTITY_VERSION, AI_PROMPT_VERSION, INITIAL_AI_ROSTER, aiIdentityId } from "./ai-repository";
 
 // Published identity UUIDs must survive roster expansion and process restarts.
 const identityIds = {
@@ -35,5 +35,14 @@ describe("persistent AI roster identities", () => {
     expect(aiIdentityId(retiredModelId)).toBe("35d2355b-f6b3-50bf-a266-170f134edb33");
     expect(aiIdentityId(retiredModelId)).not.toBe(aiIdentityId("deepseek/deepseek-v4.1-flash"));
     expect(INITIAL_AI_ROSTER.some(({ modelId }) => (modelId as string) === retiredModelId)).toBe(false);
+  });
+  it("creates deterministic separate competitive identities for each protocol revision", () => {
+    for (const { modelId, displayName } of INITIAL_AI_ROSTER) {
+      const current = aiIdentityId(modelId, AI_CURRENT_IDENTITY_VERSION);
+      expect(current).not.toBe(aiIdentityId(modelId));
+      expect(current).toBe(aiIdentityId(modelId, AI_CURRENT_IDENTITY_VERSION));
+      expect(current).not.toBe(aiIdentityId(modelId, "a-future-protocol-version"));
+      expect(`${displayName} · v2`.length).toBeLessThanOrEqual(24);
+    }
   });
 });

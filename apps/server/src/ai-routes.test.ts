@@ -25,7 +25,7 @@ async function build(overrides: Partial<AiPlayerRouteOptions> = {}, enforceRateL
   if (enforceRateLimits) await app.register(rateLimit, { global: false });
   const roster = {
     enabled: true, dailyBudgetUsd: 10, players: [{ id: agentIds[0]!, displayName: "Agent One", modelId: "provider/model-one",
-      modelName: "Model One", available: true, rating: 1000, gamesPlayed: 0, wins: 0 }]
+      modelName: "Model One", protocolId: "trinity-v1", available: true, rating: 1000, gamesPlayed: 0, wins: 0 }]
   };
   const players = {
     roster: vi.fn(async () => roster),

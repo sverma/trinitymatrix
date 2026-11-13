@@ -1,14 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { clientMessageSchema, type ClientMessage, type ServerMessage } from "@trinitymatrix/protocol";
+import { validateDeclaration } from "@trinitymatrix/game-domain";
 import { Matchmaker, type GameplaySocket, type AiForfeitNotice } from "./matchmaker";
-import type { AiIdentity, AiStore } from "./ai-repository";
+import type { AiIdentity, AiStore, AiRequestCompletion } from "./ai-repository";
 import { AI_MAX_DECISION_TIME_MS, OpenRouterAgentError, type AiAgentDecision, type AiAgentDecisionResult, type AiAgentObservation } from "./ai-openrouter";
+import { AI_GAME_PROTOCOL_IDENTITY_VERSION, AI_GAME_PROTOCOL_VERSION, AI_GAME_PROTOCOL_REVISION_HASH,
+  AI_GAME_RULES_REVISION, AI_LEGACY_V1_PROTOCOL_VERSION, type AiGameRulesFacts } from "./ai-game-protocol";
+import { AiRuleToolService } from "./ai-rule-tool-service";
+import { AI_RULES_TOOL_VERSION, unavailableAiRules, type AiRulesInput } from "./ai-rule-tools";
 
 type GameCommand = Extract<ClientMessage, { type: `game.${string}` }>;
 type ModelClient = {
-  decide(input: { modelId: string; observation: AiAgentObservation; memory: string; timeoutMs?: number }): Promise<AiAgentDecisionResult>;
+  decide(input: { modelId: string; observation: AiAgentObservation; memory: string; timeoutMs?: number;
+    protocolId?: string; rulesFacts?: AiGameRulesFacts }): Promise<AiAgentDecisionResult>;
   cancelAll?(): void;
 };
+type RulesTool = { compute(input: AiRulesInput, timeoutMs?: number, signal?: AbortSignal): Promise<AiGameRulesFacts>; stop?(): Promise<void> };
 type Agent = {
   identity: AiIdentity; socket: GameplaySocket; timer: NodeJS.Timeout | null; flight: Promise<void> | null;
   history: string[]; gameId: string | null; blockedGameId: string | null; lastRevision: number; failures: number; feedback: string;
@@ -19,6 +26,7 @@ export type AiOperationContext = {
   gameId: string; modelId: string; revision: number; phase: string; handCount: number;
   attempt?: number; requestId?: string; errorCode?: string; httpStatus?: number; finishReason?: string;
   elapsedMs?: number; remainingMs?: number; costUsd?: number | null;
+  protocolId?: string; toolsVersion?: string; declarationAvailable?: boolean | null;
 };
 
 export function decisionCommand(decision: AiAgentDecision, observation: AiAgentObservation): GameCommand {
@@ -42,6 +50,7 @@ export class AiPlayers {
   private catalogController: AbortController | null = null;
   private readonly pending = new Set<Promise<void>>();
   private lastError = new Map<string, number>();
+  private rulesTool: RulesTool | null = null;
 
   constructor(
     private readonly matchmaker: Matchmaker,
@@ -49,7 +58,7 @@ export class AiPlayers {
     private readonly client: ModelClient | null,
     readonly dailyBudgetUsd: number,
     private readonly report: (code: string, agentId?: string, context?: AiOperationContext) => void = () => undefined,
-    private readonly options: { availableModels?: readonly string[]; actionDelayMs?: number; fetch?: typeof fetch } = {}
+    private readonly options: { availableModels?: readonly string[]; actionDelayMs?: number; fetch?: typeof fetch; rulesTool?: RulesTool } = {}
   ) {}
 
   async start(): Promise<void> {
@@ -122,7 +131,7 @@ export class AiPlayers {
     const budget = await this.store.budgetAvailable(this.dailyBudgetUsd);
     const identities = await this.store.listAgents();
     return { enabled: !this.stopped && this.client !== null, dailyBudgetUsd: this.dailyBudgetUsd,
-      players: identities.map((identity) => {
+      players: identities.filter((identity) => identity.selectable !== false).map((identity) => {
         const coolingDown = Date.now() - (this.lastError.get(identity.id) ?? 0) < 300_000;
         const reason = !this.client ? "OpenRouter is not configured."
           : this.stopped ? "AI players are restarting."
@@ -132,7 +141,10 @@ export class AiPlayers {
           : !this.matchmaker.isPlayerAvailable(identity.id) ? "Playing another match." : undefined;
         return { id: identity.id, displayName: identity.displayName, modelId: identity.modelId,
           modelName: identity.modelName, rating: identity.rating, gamesPlayed: identity.gamesPlayed, wins: identity.wins,
-          available: !reason, ...(reason ? { reason } : {}) };
+          protocolId: identity.protocolId ?? identity.identityVersion ?? AI_LEGACY_V1_PROTOCOL_VERSION,
+          ...(identity.protocolId === AI_GAME_PROTOCOL_IDENTITY_VERSION ? {
+            protocolVersion: AI_GAME_PROTOCOL_VERSION, rulesRevision: AI_GAME_RULES_REVISION, protocolHash: AI_GAME_PROTOCOL_REVISION_HASH
+          } : {}), available: !reason, ...(reason ? { reason } : {}) };
       }) };
   }
 
@@ -244,7 +256,7 @@ export class AiPlayers {
     if (agent.failedTurns >= 3) {
       this.lastError.set(agent.identity.id, Date.now());
       this.forfeit(agent, observation.state.gameId, {
-        code: errorCode === "server-rejected" || errorCode === "invalid-command" ? "AI_INVALID_ACTION" : "AI_UNAVAILABLE",
+        code: ["server-rejected", "invalid-command", "missed-declaration", "invalid-declaration"].includes(errorCode) ? "AI_INVALID_ACTION" : "AI_UNAVAILABLE",
         message: "The AI could not complete three consecutive turns after retrying its selected model."
       });
     }
@@ -258,38 +270,72 @@ export class AiPlayers {
     if (!this.client || !identity?.enabled) { this.forfeit(agent, observation.state.gameId); return; }
     if (!this.isCurrent(observation)) return;
     if (this.remainingTime(observation) <= 1_000) { this.recover(agent, observation, "turn-deadline", "The turn deadline is too close for another model request."); return; }
-    const requestId = await this.store.reserveRequest(identity.id, identity.modelId, this.dailyBudgetUsd);
+    const protocolId = identity.protocolId ?? identity.identityVersion ?? AI_LEGACY_V1_PROTOCOL_VERSION;
+    const versioned = identity.protocolId !== undefined || identity.identityVersion !== undefined;
+    const v2 = protocolId === AI_GAME_PROTOCOL_IDENTITY_VERSION;
+    if (!v2 && protocolId !== AI_LEGACY_V1_PROTOCOL_VERSION) {
+      this.report("unknown-protocol", identity.id);
+      this.forfeit(agent, observation.state.gameId); return;
+    }
+    let rulesFacts: AiGameRulesFacts | undefined;
+    if (v2 && observation.state.phase === "playing") {
+      this.rulesTool ??= this.options.rulesTool ?? new AiRuleToolService();
+      try {
+        rulesFacts = await this.rulesTool.compute({ hand: observation.hand, wildRank: observation.state.wildRank,
+          visibleDiscard: observation.state.topDiscard }, Math.min(1_000, this.remainingTime(observation) - 1_000));
+      } catch { rulesFacts = unavailableAiRules("tool-error"); }
+      if (this.stopped || !this.isCurrent(observation)) return;
+      if (this.remainingTime(observation) <= 1_000) {
+        this.recover(agent, observation, "turn-deadline", "The turn deadline is too close for another model request."); return;
+      }
+    }
+    const declarationAvailable = observation.hand.length === 14 && rulesFacts?.status === "complete"
+      ? rulesFacts.immediateDeclaration !== null : null;
+    const serverRevision = process.env.APP_REVISION;
+    const context = { protocolId, matchId: observation.state.gameId, gameRevision: observation.state.revision,
+      ...(v2 ? { toolsVersion: AI_RULES_TOOL_VERSION, declarationAvailable } : {}),
+      ...(serverRevision && serverRevision.length <= 100 ? { serverRevision } : {}) };
+    const requestId = versioned ? await this.store.reserveRequest(identity.id, identity.modelId, this.dailyBudgetUsd, context)
+      : await this.store.reserveRequest(identity.id, identity.modelId, this.dailyBudgetUsd);
     if (this.stopped) return;
     if (!requestId) { this.forfeit(agent, observation.state.gameId, {
       code: "AI_BUDGET_EXHAUSTED", message: "The AI stopped because the shared daily inference budget was reached."
     }); return; }
+    const finish = (cost: number | null, success: boolean, audit: AiRequestCompletion) => versioned
+      ? this.store.finishRequest(requestId, cost, success, audit) : this.store.finishRequest(requestId, cost, success);
+    const outcome = async (audit: AiRequestCompletion) => {
+      if (versioned) await this.store.recordRequestOutcome?.(requestId, audit);
+    };
     if (!this.isCurrent(observation)) {
-      await this.store.finishRequest(requestId, 0, false);
+      await finish(0, false, { outcome: "stale" });
       return;
     }
     const timeoutMs = Math.min(AI_MAX_DECISION_TIME_MS, this.remainingTime(observation));
     if (timeoutMs <= 1_000) {
-      await this.store.finishRequest(requestId, 0, false);
+      await finish(0, false, { outcome: "cancelled" });
       this.recover(agent, observation, "turn-deadline", "The turn deadline is too close for another model request.");
       return;
     }
     let result: AiAgentDecisionResult;
     const started = Date.now();
     try {
-      result = await this.client.decide({ modelId: identity.modelId, observation, memory: identity.memory, timeoutMs });
+      result = await this.client.decide({ modelId: identity.modelId, observation, memory: identity.memory, timeoutMs,
+        protocolId, ...(rulesFacts ? { rulesFacts } : {}) });
     } catch (error) {
       // A shutdown leaves its already-durable reservation intact at unknown cost.
       // Avoid starting a new database operation after cancellation/teardown.
       if (this.stopped) return;
       const known = error instanceof OpenRouterAgentError ? error : null;
-      const costUsd = known?.metadata.usage?.costUsd ?? null;
-      await this.store.finishRequest(requestId, costUsd, false);
       const errorCode = known?.code ?? "provider-unavailable";
+      const costUsd = known?.metadata.usage?.costUsd ?? (["configuration", "invalid-rules-facts"].includes(errorCode) ? 0 : null);
+      await finish(costUsd, false, { ...(known?.metadata.action ? { action: known.metadata.action } : {}),
+        outcome: ["missed-declaration", "invalid-declaration", "invalid-rules-facts"].includes(errorCode) ? "policy-rejected" : "provider-failed" });
       this.report("model-request-failed", identity.id, {
         gameId: observation.state.gameId, modelId: identity.modelId, revision: observation.state.revision,
         phase: observation.state.phase, handCount: observation.hand.length, requestId,
         attempt: (agent.failureRevision === observation.state.revision ? agent.failures : 0) + 1,
         errorCode, elapsedMs: Date.now() - started, remainingMs: this.remainingTime(observation), costUsd,
+        protocolId, ...(v2 ? { toolsVersion: AI_RULES_TOOL_VERSION, declarationAvailable } : {}),
         ...(known?.metadata.status === undefined ? {} : { httpStatus: known.metadata.status }),
         ...(known?.metadata.finishReason === undefined ? {} : { finishReason: known.metadata.finishReason })
       });
@@ -302,18 +348,37 @@ export class AiPlayers {
       return;
     }
     if (this.stopped) return;
-    await this.store.finishRequest(requestId, result.usage.costUsd, true);
+    await finish(result.usage.costUsd, true, { action: result.decision.action });
     if (this.stopped) return;
-    if (!this.isCurrent(observation)) return;
+    if (!this.isCurrent(observation)) { await outcome({ outcome: "stale" }); return; }
     if (result.modelId !== identity.modelId) {
       this.lastError.set(identity.id, Date.now());
       this.report("model-mismatch", identity.id);
+      await outcome({ outcome: "provider-failed" });
       this.forfeit(agent, observation.state.gameId);
+      return;
+    }
+    // Recheck locally as well as in the provider adapter. Only the model's own
+    // validated command is ever executed; a tool plan cannot play a move.
+    const missedWin = v2 && rulesFacts?.status === "complete" && rulesFacts.immediateDeclaration !== null
+      && result.decision.action !== "declare";
+    const illegalDeclaration = v2 && result.decision.action === "declare"
+      && !validateDeclaration(observation.hand, result.decision.cardId ?? "", result.decision.groups, observation.state.wildRank).valid;
+    if (missedWin || illegalDeclaration) {
+      const code = missedWin ? "missed-declaration" : "invalid-declaration";
+      await outcome({ outcome: "policy-rejected" });
+      this.report("model-action-rejected", identity.id, { gameId: observation.state.gameId, modelId: identity.modelId,
+        revision: observation.state.revision, phase: observation.state.phase, handCount: observation.hand.length,
+        requestId, errorCode: code, protocolId, toolsVersion: AI_RULES_TOOL_VERSION, declarationAvailable });
+      this.recover(agent, observation, code, missedWin
+        ? "A legal declaration is available. Return declare now with a valid final discard and all thirteen remaining cards grouped."
+        : "Your declaration was invalid. Check the rules facts and return a legal decision.");
       return;
     }
     let command: GameCommand;
     try { command = decisionCommand(result.decision, observation); }
     catch {
+      await outcome({ outcome: "policy-rejected" });
       this.report("model-action-rejected", identity.id, { gameId: observation.state.gameId, modelId: identity.modelId,
         revision: observation.state.revision, phase: observation.state.phase, handCount: observation.hand.length,
         requestId, errorCode: "invalid-command", attempt: (agent.failureRevision === observation.state.revision ? agent.failures : 0) + 1 });
@@ -321,6 +386,7 @@ export class AiPlayers {
     }
     const applied = this.matchmaker.executeAgentCommand(identity.id, command);
     if (applied?.accepted) {
+      await outcome({ outcome: "accepted" });
       agent.failures = 0; agent.feedback = "";
       agent.failureRevision = -1;
       if (command.type === "game.discard" || (command.type === "game.declare" && !applied.dropped)) {
@@ -328,6 +394,7 @@ export class AiPlayers {
       }
       await this.store.saveMemory(identity.id, result.decision.memory);
     } else {
+      await outcome({ outcome: "server-rejected" });
       this.report("model-action-rejected", identity.id, { gameId: observation.state.gameId, modelId: identity.modelId,
         revision: observation.state.revision, phase: observation.state.phase, handCount: observation.hand.length,
         requestId, errorCode: applied && !applied.accepted ? applied.code : "game-ended",
@@ -351,6 +418,8 @@ export class AiPlayers {
     this.catalogController = null;
     for (const agent of this.agents.values()) if (agent.timer) { clearTimeout(agent.timer); agent.timer = null; }
     this.client?.cancelAll?.();
+    const rulesTool = this.rulesTool; this.rulesTool = null;
+    await rulesTool?.stop?.();
     await Promise.allSettled([...this.pending]);
   }
 }

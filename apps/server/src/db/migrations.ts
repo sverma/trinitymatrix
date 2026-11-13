@@ -7,6 +7,7 @@ import replayExports from "../../migrations/0006_replay_exports.sql";
 import adminPasskeys from "../../migrations/0007_admin_passkeys.sql";
 import modelBoundAiPlayers from "../../migrations/0008_model_bound_ai_players.sql";
 import liveBroadcasts from "../../migrations/0009_live_broadcasts.sql";
+import aiProtocolProvenance from "../../migrations/0010_ai_protocol_provenance.sql";
 import type { SqlMigration } from "./migrate";
 
 export const sqlMigrations: readonly SqlMigration[] = [
@@ -18,5 +19,6 @@ export const sqlMigrations: readonly SqlMigration[] = [
   { name: "0006_replay_exports.sql", sql: replayExports },
   { name: "0007_admin_passkeys.sql", sql: adminPasskeys },
   { name: "0008_model_bound_ai_players.sql", sql: modelBoundAiPlayers },
-  { name: "0009_live_broadcasts.sql", sql: liveBroadcasts }
+  { name: "0009_live_broadcasts.sql", sql: liveBroadcasts },
+  { name: "0010_ai_protocol_provenance.sql", sql: aiProtocolProvenance }
 ];
