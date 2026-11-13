@@ -5,6 +5,7 @@ import {
   type BroadcastComment, type BroadcastFrame, type LiveBroadcastSummary
 } from "@trinitymatrix/protocol";
 import { rankingGameSnapshotSchema, type RankingGameSnapshot } from "./game";
+import { parseRecordedHandLayout, recordedHandLayoutFromCommand, reconcileRecordedHandLayout } from "./recorded-hand-layout";
 
 export type BroadcastAccess = {
   broadcastId: string; matchId: string; gameName: string; participantIds: string[]; allAi: boolean; ended: boolean;
@@ -40,12 +41,13 @@ const eventLabels: Record<string, string> = {
 };
 
 /** The only archive-to-viewer boundary. Never spread stored snapshots or commands. */
-export function projectBroadcastFrame(event: ArchiveEvent, gameName: string, now: Date, winner?: ReleasedWinner): BroadcastFrame | null {
+export function projectBroadcastFrame(event: ArchiveEvent, gameName: string, now: Date, winner?: ReleasedWinner,
+  recordedLayouts: ReadonlyMap<string, unknown> = new Map()): BroadcastFrame | null {
   const occurredAt = event.occurredAt.getTime();
   const recordedAt = event.recordedAt.getTime();
   const releasedAt = Math.max(occurredAt, recordedAt) + BROADCAST_DELAY_MS;
   if (!Number.isFinite(releasedAt) || releasedAt > now.getTime()) return null;
-  const payload = event.payload && typeof event.payload === "object" ? event.payload as { state?: unknown } : {};
+  const payload = event.payload && typeof event.payload === "object" ? event.payload as { state?: unknown; command?: unknown } : {};
   const parsed = rankingGameSnapshotSchema.safeParse(payload.state);
   if (!parsed.success) return null;
   const state = parsed.data;
@@ -62,6 +64,14 @@ export function projectBroadcastFrame(event: ArchiveEvent, gameName: string, now
   }));
   const eventType = Object.hasOwn(eventLabels, event.eventType) ? event.eventType : "game.update";
   const actor = players.find(({ id }) => id === event.actorUserId);
+  const layouts = new Map(recordedLayouts);
+  const currentLayout = recordedHandLayoutFromCommand(payload.command);
+  if (actor && currentLayout) layouts.set(actor.id, currentLayout);
+  // These submissions belong to this released snapshot, never the current game.
+  for (const submission of state.showdown?.submissions ?? []) {
+    const groups = parseRecordedHandLayout(submission.groups);
+    if (groups) layouts.set(submission.playerId, groups);
+  }
   const frame = {
     sequence: event.sequence, capturedAt: occurredAt, releasedAt,
     game: {
@@ -77,7 +87,10 @@ export function projectBroadcastFrame(event: ArchiveEvent, gameName: string, now
       } : null,
       broadcast: { gameName, delayMs: BROADCAST_DELAY_MS }
     },
-    hands: state.hands.map(({ playerId, cards }) => ({ playerId, cards: cards.map((card) => cardSchema.parse(card)) })),
+    hands: state.hands.map(({ playerId, cards }) => {
+      const groups = reconcileRecordedHandLayout(layouts.get(playerId), cards);
+      return { playerId, cards: cards.map((card) => cardSchema.parse(card)), ...(groups ? { layout: { source: "recorded" as const, groups } } : {}) };
+    }),
     event: { type: eventType, ...(actor ? { actorPlayerId: actor.id } : {}), summary: `${actor ? `${actor.displayName}: ` : ""}${eventLabels[eventType] ?? "Game updated"}` },
     ...(winner && state.phase === "finished" && players.some(({ id }) => id === winner.id) ? { winner } : {})
   };
@@ -110,14 +123,14 @@ const selectBroadcast = `SELECT b.id,b.match_id,b.public_name,b.created_at,
       AND recorded_at <= $1::timestamptz-interval '120 seconds' ORDER BY sequence DESC LIMIT 1) e ON true
   WHERE b.closed_at IS NULL`;
 
-function rowFrame(row: Row, now: Date): BroadcastFrame | null {
+function rowFrame(row: Row, now: Date, recordedLayouts?: ReadonlyMap<string, unknown>): BroadcastFrame | null {
   if (row.sequence === null || !row.occurred_at || !row.recorded_at) return null;
   const winner = row.result_recorded_at && row.result_recorded_at.getTime() + BROADCAST_DELAY_MS <= now.getTime()
     && row.winner_user_id && row.end_reason ? {
       id: row.winner_user_id, name: row.players.find(({ id }) => id === row.winner_user_id)?.displayName ?? "Player", reason: row.end_reason
     } : undefined;
   return projectBroadcastFrame({ sequence: Number(row.sequence), eventType: row.event_type ?? "game.update", actorUserId: row.actor_user_id,
-    payload: row.payload, occurredAt: row.occurred_at, recordedAt: row.recorded_at }, row.public_name, now, winner);
+    payload: row.payload, occurredAt: row.occurred_at, recordedAt: row.recorded_at }, row.public_name, now, winner, recordedLayouts);
 }
 function rowSummary(row: Row, frame: BroadcastFrame | null): LiveBroadcastSummary {
   return liveBroadcastSummarySchema.parse({ gameName: row.public_name, gameId: row.match_id,
@@ -134,6 +147,30 @@ function comment(row: CommentRow): BroadcastComment {
 
 export class PostgresBroadcastRepository implements BroadcastRepository {
   constructor(private readonly pool: Pool) {}
+
+  private async recordedLayouts(matchId: string, sequence: number, now: Date): Promise<ReadonlyMap<string, unknown>> {
+    // At most one grouping-only record per real participant. Do not reconstruct
+    // the whole archive or select full command payloads for each spectator poll.
+    // AI draw/discard/drop commands never contain layouts. Guard JSON extraction
+    // with CASE so their large archived snapshots are not repeatedly detoasted.
+    // Keep declaration history: the declarer's melds are not showdown submissions.
+    const result = await this.pool.query<{ player_id: string; groups: unknown }>(
+      `SELECT p.user_id AS player_id,recorded.groups FROM match_participants p JOIN app_users u ON u.id=p.user_id
+       JOIN LATERAL (
+         SELECT candidate.groups FROM game_events e CROSS JOIN LATERAL (
+           SELECT CASE e.event_type WHEN 'game.declare' THEN e.payload#>'{command,melds}'
+             WHEN 'game.submit-hand' THEN e.payload#>'{command,groups}' ELSE e.payload#>'{command,layout}' END AS groups
+         ) candidate
+         WHERE e.match_id=p.match_id AND e.actor_user_id=p.user_id AND e.sequence<=$2
+           AND e.occurred_at<=$3::timestamptz-interval '120 seconds' AND e.recorded_at<=$3::timestamptz-interval '120 seconds'
+           AND e.event_type IN ('game.draw','game.discard','game.drop','game.declare','game.submit-hand')
+           AND CASE WHEN u.actor_kind='ai' AND e.event_type IN ('game.draw','game.discard','game.drop') THEN false
+             ELSE e.payload#>>'{command,type}'=e.event_type AND jsonb_typeof(candidate.groups)='array' END
+         ORDER BY e.sequence DESC LIMIT 1
+       ) recorded ON true WHERE p.match_id=$1`, [matchId, sequence, now]
+    );
+    return new Map(result.rows.map(({ player_id, groups }) => [player_id, groups]));
+  }
 
   async enableForGame(snapshot: RankingGameSnapshot): Promise<void> {
     if (!snapshot.publicName) throw new BroadcastConflictError("A public game name is required.");
@@ -179,7 +216,8 @@ export class PostgresBroadcastRepository implements BroadcastRepository {
        JOIN app_users u ON u.id=c.author_user_id AND u.suspended_at IS NULL
        WHERE c.broadcast_id=$1 AND c.released_at<=$2 ORDER BY c.created_at DESC,c.id DESC LIMIT 100`, [row.id, now]
     );
-    const frame = rowFrame(row, now);
+    const layouts = row.sequence === null ? undefined : await this.recordedLayouts(row.match_id, Number(row.sequence), now);
+    const frame = rowFrame(row, now, layouts);
     return { broadcast: rowSummary(row, frame), frame, comments: comments.rows.reverse().map(comment) };
   }
 
@@ -191,7 +229,8 @@ export class PostgresBroadcastRepository implements BroadcastRepository {
        AND occurred_at<=$3::timestamptz-interval '120 seconds' AND recorded_at<=$3::timestamptz-interval '120 seconds'`, [row.match_id, sequence, now]
     )).rows[0];
     if (!event) return null;
-    return rowFrame({ ...row, ...event }, now);
+    const layouts = await this.recordedLayouts(row.match_id, Number(event.sequence), now);
+    return rowFrame({ ...row, ...event }, now, layouts);
   }
 
   async timeline(gameName: string, beforeSequence: number | undefined, limit: number, now = new Date()) {

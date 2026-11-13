@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api";
 import { FakeEventSource, liveComment, liveDetail, liveFrame, liveName, livePlayer } from "./live.test-helpers";
 import { WatchPage } from "./WatchPage";
+import { recordedCards, recordedLayout } from "./watch-hand.fixtures";
 vi.mock("./LiveVideo", () => ({ LiveVideo: () => null }));
 
 beforeEach(() => {
@@ -40,5 +41,31 @@ describe("delayed table spectator page", () => {
     expect(await screen.findByText(/Message queued/)).toBeInTheDocument();
     expect(send.mock.calls[0]![2]).toBe(send.mock.calls[1]![2]);
     expect(within(screen.getByRole("list", { name: "Broadcast messages" })).queryByText("My delayed message")).not.toBeInTheDocument();
+  });
+
+  it("keeps recorded grouping and progress tied to the selected delayed frame during live updates and DVR seeking", async () => {
+    const user = userEvent.setup();
+    const first = liveFrame(1);
+    first.game.wildRank = 13;
+    first.hands[0] = { playerId: livePlayer.id, cards: recordedCards, layout: { source: "recorded", groups: recordedLayout.groups.map((group) => [...group]) } };
+    const next = { ...first, sequence: 2, game: { ...first.game, wildRank: 7, revision: 2 } };
+    vi.mocked(api.liveBroadcast).mockResolvedValue(liveDetail(first));
+    vi.mocked(api.broadcastTimeline).mockResolvedValue({ frames: [first], nextCursor: null });
+    render(<WatchPage gameName={liveName} player={livePlayer} onAuthenticationRequired={vi.fn()} />);
+    const hand = await screen.findByRole("region", { name: "Asha's revealed hand" });
+    expect(within(hand).getByText("Recorded grouping")).toBeInTheDocument();
+    expect(within(hand).getByLabelText("Asha's meld counts")).toHaveTextContent("1 natural 21");
+    expect(within(hand).getByLabelText("Asha's meld counts")).toHaveTextContent("33 valid meld points");
+    vi.mocked(api.broadcastTimeline).mockResolvedValue({ frames: [first, next], nextCursor: null });
+    act(() => FakeEventSource.instances[0]!.emit("frame", { frame: next }));
+    expect(within(hand).getByLabelText("Asha's meld counts")).toHaveTextContent("0 natural 21");
+    expect(within(hand).getByLabelText("Asha's meld counts")).toHaveTextContent("36 valid meld points");
+    await user.click(screen.getByRole("button", { name: "Previous move" }));
+    expect(within(hand).getByLabelText("Asha's meld counts")).toHaveTextContent("1 natural 21");
+    expect(within(hand).getByLabelText("Asha's meld counts")).toHaveTextContent("33 valid meld points");
+    await user.click(screen.getByRole("button", { name: "Go to delayed live" }));
+    expect(within(hand).getByLabelText("Asha's meld counts")).toHaveTextContent("0 natural 21");
+    expect(within(hand).getByRole("list", { name: "Asha's cards" }).querySelectorAll("img")).toHaveLength(13);
+    expect(api.liveBroadcast).toHaveBeenCalledTimes(1);
   });
 });

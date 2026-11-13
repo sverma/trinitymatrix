@@ -1,17 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import type { BroadcastComment, Card } from "@trinitymatrix/protocol";
+import type { BroadcastComment } from "@trinitymatrix/protocol";
 import { cardLabel } from "@trinitymatrix/game-domain";
 import { api, type AuthPlayer } from "../../api";
 import { useLiveBroadcast } from "./useLiveBroadcast";
 import { LiveVideo } from "./LiveVideo";
 import { shareBroadcast, watchPath } from "./LiveDirectory";
+import { WatchHand, watchCardAsset } from "./WatchHand";
 
 function time(value: number) { return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
-function cardAsset(card: Card) {
-  if (card.printedJoker) return `/assets/cards/${card.deck % 2 ? "red" : "black"}_of_jokers.png`;
-  const rank = ({ 1: "ace", 11: "jack", 12: "queen", 13: "king" } as Record<number, string>)[card.rank!] ?? card.rank;
-  return `/assets/cards/${rank}_of_${card.suit}.png`;
-}
 
 function WatchComments({ gameName, comments, canModerate, onComment }: { gameName: string; comments: readonly BroadcastComment[]; canModerate: boolean; onComment: (comment: BroadcastComment) => void }) {
   const [message, setMessage] = useState("");
@@ -100,13 +96,14 @@ export function WatchPage({ gameName, player: _player, onAuthenticationRequired 
       </div>
       {frame.winner && <div className="watch-winner" role="status"><strong>{frame.winner.name} won.</strong> {frame.winner.reason === "declaration" ? `Validated declaration${frame.winner.score === undefined ? "." : ` · ${frame.winner.score} points.`}` : frame.winner.reason === "invalid-declaration" ? "The final opponent made an invalid declaration." : "The last remaining player won."}</div>}
       <div className="watch-layout"><div className="watch-board" aria-label="Delayed Trinity table">
-        <div className="watch-table-state"><span>Closed deck <strong>{frame.game.stockCount} cards</strong></span><span>Wild rank <strong>{frame.game.wildRank}</strong></span><span>Open deck {frame.game.topDiscard ? <img src={cardAsset(frame.game.topDiscard)} alt={cardLabel(frame.game.topDiscard)} /> : <strong>Empty</strong>}</span></div>
+        <div className="watch-table-state"><span>Closed deck <strong>{frame.game.stockCount} cards</strong></span><span>Wild rank <strong>{frame.game.wildRank}</strong></span><span>Open deck {frame.game.topDiscard ? <img src={watchCardAsset(frame.game.topDiscard)} alt={cardLabel(frame.game.topDiscard)} /> : <strong>Empty</strong>}</span></div>
         <div className={`watch-hands watch-seats-${broadcast.playerCount}`}>{frame.game.players.map((seat) => {
-          const cards = frame.hands.find((hand) => hand.playerId === seat.id)?.cards ?? [];
+          const hand = frame.hands.find((hand) => hand.playerId === seat.id) ?? { cards: [] };
+          const cards = hand.cards;
           return <section className={`watch-player-hand ${seat.id === frame.game.currentPlayerId && frame.game.phase === "playing" ? "current-turn" : ""}`} key={seat.id} aria-label={`${seat.displayName}'s revealed hand`}>
             <header><strong>{seat.displayName}</strong><span>{seat.actorKind === "ai" ? "AI player" : "Human"} · {seat.status === "playing" ? `${cards.length} cards` : seat.status}{seat.id === frame.game.currentPlayerId && frame.game.phase === "playing" ? " · Current turn" : ""}</span></header>
             {seat.aiModelId && <code>{seat.aiModelId}</code>}
-            <ul className="watch-cards" aria-label={`${seat.displayName}'s cards`}>{cards.map((card) => <li key={card.id}><img src={cardAsset(card)} alt={cardLabel(card)} loading="lazy" />{(card.printedJoker || card.rank === frame.game.wildRank) && <small>Wild</small>}</li>)}</ul>
+            <WatchHand hand={hand} wildRank={frame.game.wildRank} displayName={seat.displayName} />
           </section>;
         })}</div>
       </div><aside className="watch-move-feed" aria-labelledby="watch-moves-title"><h2 id="watch-moves-title">Released moves</h2>

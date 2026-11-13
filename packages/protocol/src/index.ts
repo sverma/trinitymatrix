@@ -320,10 +320,21 @@ export type LiveBroadcastSummary = z.infer<typeof liveBroadcastSummarySchema>;
 export const broadcastFrameEventSchema = z.object({
   type: z.string().min(1).max(100), actorPlayerId: z.string().uuid().optional(), summary: z.string().max(200)
 }).strict();
+export const broadcastHandSchema = z.object({
+  playerId: z.string().uuid(), cards: z.array(cardSchema).max(14),
+  layout: z.object({ source: z.literal("recorded"), groups: handLayoutSchema }).strict().optional()
+}).strict().superRefine((hand, context) => {
+  if (!hand.layout) return;
+  const ids = hand.layout.groups.flat();
+  const owned = new Set(hand.cards.map(({ id }) => id));
+  if (ids.length !== hand.cards.length || owned.size !== ids.length || ids.some((id) => !owned.has(id))) {
+    context.addIssue({ code: "custom", path: ["layout"], message: "A recorded layout must partition the released hand." });
+  }
+});
 export const broadcastFrameSchema = z.object({
   sequence: z.number().int().positive(), capturedAt: z.number().int().nonnegative(), releasedAt: z.number().int().nonnegative(),
   game: gamePublicStateSchema,
-  hands: z.array(z.object({ playerId: z.string().uuid(), cards: z.array(cardSchema).max(14) }).strict()).min(2).max(6),
+  hands: z.array(broadcastHandSchema).min(2).max(6),
   event: broadcastFrameEventSchema,
   winner: z.object({ id: z.string().uuid(), name: z.string().max(24),
     reason: z.enum(["declaration", "invalid-declaration", "player-dropped"]), score: z.number().int().nonnegative().optional()

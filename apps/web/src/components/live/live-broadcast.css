@@ -53,6 +53,22 @@
 .watch-cards li { position: relative; width: 3.5rem; flex: 0 0 3.5rem; }
 .watch-cards img { display: block; width: 100%; height: auto; aspect-ratio: .687; border-radius: .25rem; background: #fff; }
 .watch-cards small { position: absolute; bottom: .2rem; right: .15rem; padding: .1rem .2rem; color: #071b25; border-radius: .2rem; background: #ffe29c; font-size: .6rem; }
+.watch-layout-source { display: grid; gap: .2rem; margin: .7rem 0 .45rem; color: var(--gold-strong); font-size: .76rem; font-weight: 750; }
+.watch-layout-source span { color: var(--muted); font-size: .7rem; font-weight: 400; line-height: 1.45; }
+.watch-hand-progress { display: flex; flex-wrap: wrap; gap: .35rem .7rem; margin: .5rem 0; color: var(--muted); font-size: .73rem; line-height: 1.5; }
+.watch-hand-progress strong { color: var(--ink); }
+.watch-hand-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; gap: .65rem; min-width: 0; margin: .7rem 0 0; padding: .2rem 0 .7rem; list-style: none; }
+.watch-hand-group { min-width: 0; padding: .6rem; border: 1px solid #617c85; border-radius: .65rem; background: rgba(255,255,255,.025); }
+.watch-hand-group:only-child { grid-column: 1 / -1; }
+.watch-hand-group section { min-width: 0; }
+.watch-hand-group .watch-cards { margin: .55rem 0 0; padding: 0 0 .3rem; overflow-x: auto; overflow-y: hidden; }
+.watch-hand-group .watch-meld-heading strong { font-size: .78rem; }
+.watch-hand-group .watch-meld-heading span { font-size: .7rem; }
+.watch-hand-group.watch-meld-trinity { border-color: var(--gold); }
+.watch-hand-group.watch-meld-trinity .watch-meld-heading strong { color: var(--gold-strong); }
+.watch-hand-group.watch-meld-meld { border-color: #53ad91; }
+.watch-hand-group.watch-meld-invalid { border-color: #e78d86; }
+.watch-hand-group.watch-meld-invalid .watch-meld-heading strong { color: #ffb1ad; }
 .watch-move-feed { min-width: 0; max-height: 42rem; padding: 1rem; overflow-y: auto; border: 1px solid var(--line); border-radius: 1rem; background: var(--panel); }
 .watch-move-feed h2 { margin: 0 0 .8rem; font-size: 1.1rem; }
 .watch-move-feed ol { display: grid; gap: .35rem; margin: .6rem 0 0; padding: 0; list-style: none; }

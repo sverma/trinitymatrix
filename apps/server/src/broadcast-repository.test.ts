@@ -64,4 +64,30 @@ describe("broadcast archive privacy boundary", () => {
     state.phase = "finished";
     expect(projectBroadcastFrame(event, state.publicName!, new Date(+receivedAt + BROADCAST_DELAY_MS), winner)?.winner).toEqual(winner);
   });
+
+  it("projects only the actor's recorded grouping and reconciles it against the post-move hand", () => {
+    const { state, event } = fixture(); const hand = state.hands[0]!;
+    const ids = hand.cards.map(({ id }) => id);
+    const command = { type: "game.draw", layout: [[ids[2], ids[0], "PRIVATE_FOREIGN_ID"], ids.slice(3, 12), [ids[1]]], memory: "PRIVATE_NOTES" };
+    const frame = projectBroadcastFrame({ ...event, eventType: "game.draw", actorUserId: hand.playerId, payload: { state, command } },
+      state.publicName!, new Date(+receivedAt + BROADCAST_DELAY_MS))!;
+    expect(frame.hands[0]!.layout).toEqual({ source: "recorded", groups: [[ids[2], ids[0]], ids.slice(3, 12), [ids[1]], [ids[12]]] });
+    expect(frame.hands[0]!.layout!.groups.flat().sort()).toEqual([...ids].sort());
+    expect(frame.hands[1]!.layout).toBeUndefined();
+    expect(JSON.stringify(frame)).not.toMatch(/PRIVATE_|"command"|"memory"|"layout":\{"type"/);
+    const wrongOwner = projectBroadcastFrame({ ...event, actorUserId: state.hands[1]!.playerId, payload: { state, command } },
+      state.publicName!, new Date(+receivedAt + BROADCAST_DELAY_MS))!;
+    expect(wrongOwner.hands.every(({ layout }) => !layout)).toBe(true);
+  });
+
+  it("uses valid submitted groups from the released showdown snapshot and ignores malformed/unowned layouts", () => {
+    const { state, event } = fixture(); const hand = state.hands[1]!; const ids = hand.cards.map(({ id }) => id);
+    state.phase = "showdown";
+    state.showdown = { declarerId: state.seats[0]!.id, pendingPlayerIds: [], submissions: [{ playerId: hand.playerId, groups: [ids.slice(0, 3), ids.slice(3)] }], endsAt: +receivedAt, score: 21 };
+    const layouts = new Map<string, unknown>([[hand.playerId, [ids]], [state.hands[0]!.playerId, { invalid: true }], ["not-seated", [["PRIVATE_OTHER_HAND"]]]]);
+    const frame = projectBroadcastFrame(event, state.publicName!, new Date(+receivedAt + BROADCAST_DELAY_MS), undefined, layouts)!;
+    expect(frame.hands[1]!.layout).toEqual({ source: "recorded", groups: [ids.slice(0, 3), ids.slice(3)] });
+    expect(frame.hands[0]!.layout).toBeUndefined();
+    expect(JSON.stringify(frame)).not.toMatch(/PRIVATE_OTHER_HAND|submissions|"groups":\{.*invalid/);
+  });
 });
