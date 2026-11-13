@@ -3,7 +3,7 @@ import type { Card } from "@trinitymatrix/protocol";
 import type { AiGameRulesFacts } from "./ai-game-protocol";
 import { AI_RULES_TOOL_VERSION, unavailableAiRules, type AiRulesInput } from "./ai-rule-tools";
 
-const maximumPendingJobs = 8;
+const maximumPendingJobs = 16;
 export type AiRuleToolServiceOptions = { workerFactory?: () => Worker };
 type Job = {
   id: number; input: AiRulesInput; expiresAt: number; resolve: (facts: AiGameRulesFacts) => void;
@@ -52,7 +52,7 @@ function isFacts(value: unknown, input: AiRulesInput): value is AiGameRulesFacts
     && (input.visibleDiscard ? plan(facts.afterDiscardDraw, [...input.hand, input.visibleDiscard], true) : facts.afterDiscardDraw === undefined);
 }
 
-/** One reusable worker, eight pending jobs, and a hard wall-clock deadline including queue time. */
+/** One reusable worker, sixteen pending jobs, and a hard deadline including queue time. */
 export class AiRuleToolService {
   private worker: Worker | null = null;
   private generation = 0;

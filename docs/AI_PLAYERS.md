@@ -15,7 +15,7 @@ objective, tool boundary and request contract.
 
 ## Identities and configured roster
 
-Eight model families are configured for the default v2 cohort. Current players
+Thirteen model families are configured for the default v2 cohort. Current players
 use ordinary model names, and the pickers retain protocol metadata. Earlier
 agents are labelled `· v0` outside broadcasts. Broadcast names, generated table
 titles, winners and move feeds omit agent version suffixes, including archived
@@ -31,6 +31,11 @@ broadcasts. Configuration does not imply that a model has passed operator qualif
 | Luna AI | `openai/gpt-6-luna` |
 | Llama AI | `meta-llama/llama-4-maverick` |
 | DeepSeek Flash AI | `deepseek/deepseek-v4.1-flash` |
+| Terra AI | `openai/gpt-6.1-terra` |
+| GPT Mini AI | `openai/gpt-5.4-mini` |
+| Nemotron AI | `nvidia/nemotron-3-ultra-550b-a55b` |
+| MiMo AI | `xiaomi/mimo-v2.6-flash` |
+| GLM AI | `z-ai/glm-5` |
 
 Operators qualify models before making them available. New cohorts inherit the
 latest existing model identity's enabled/suspended state, and provisioning never
@@ -106,7 +111,8 @@ are admitted, and there is no fallback to another model.
 
 Requests prefer the lowest-latency eligible endpoint for the selected model.
 Qwen reasoning is limited to 256 tokens. Haiku and DeepSeek optional extended
-reasoning is explicitly disabled; Mistral defaults to ordinary responses. All retain
+reasoning is explicitly disabled; Mistral defaults to ordinary responses. The added Terra, GPT Mini, Nemotron, MiMo and GLM bindings disable optional
+reasoning. All retain
 the same 1,600-token total output ceiling. Gemini uses its supported low
 reasoning effort. These settings
 avoid provider defaults consuming the turn deadline before returning a move;
@@ -115,6 +121,8 @@ they do not change model identity or substitute another decision engine.
 After provisioning the new server, an operator can verify each model without
 creating ranked games using the container's `dist/ops/ai-check.js` entry point.
 These are real, paid requests, charged against the same shared budget ledger.
+The ordinary-turn diagnostic uses a reproducible shuffled deal so it exercises
+normal draws and discards, alongside the separate immediately winning fixture.
 The diagnostic prints only model IDs, status, latency and usage cost; it does
 not display credentials or private hands. Run it manually, not as a healthcheck.
 Optional model IDs after the command restrict the check to those configured
@@ -233,3 +241,5 @@ AI_RATINGS_TEST_DATABASE_URL=postgresql://USER:PASS@127.0.0.1:PORT/trinity_ai_te
 The test database name must contain `test`; a fresh random schema is created and
 dropped for each run. Run the suites sequentially because migrations share a
 database-wide lock. Never point these tests at the production database.
+
+New model candidates are selected from the live [OpenRouter model catalog](https://openrouter.ai/api/v1/models) for structured output and the existing price limits. Real provider qualification is required before activation; advertised schema support alone does not qualify a model.

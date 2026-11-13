@@ -50,10 +50,17 @@ export type AiQualificationReport = {
 
 /** Fixture-only opponent. It never enters matchmaking, archival, profiles or ratings. */
 function qualificationGame(identity: AiIdentity, humanId: string): RankingGame {
+  // A reproducible shuffled deal exercises ordinary draws/discards as well as
+  // readiness. An always-zero shuffle happened to start with a winning hand.
+  let seed = 94;
+  const randomIndex = (maximum: number) => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed % maximum;
+  };
   const seeded = new RankingGame([
     { id: identity.id, displayName: identity.displayName, actorKind: "ai", aiModelId: identity.modelId },
     { id: humanId, displayName: "Diagnostic seat", actorKind: "human" }
-  ], () => 0);
+  ], randomIndex);
   const snapshot = seeded.snapshot();
   snapshot.currentPlayerIndex = snapshot.seats.findIndex(({ id }) => id === identity.id);
   snapshot.turnEndsAt = Date.now() + 45_000;

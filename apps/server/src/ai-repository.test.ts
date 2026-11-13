@@ -17,13 +17,18 @@ describe("persistent AI roster identities", () => {
   it("extends the roster without rotating the prompt or any published identity", () => {
     expect(AI_LEGACY_IDENTITY_VERSION).toBe("trinity-v1");
     expect(AI_PROMPT_VERSION).toBe(AI_CURRENT_IDENTITY_VERSION);
-    expect(INITIAL_AI_ROSTER.map(({ modelId }) => modelId)).toEqual(Object.keys(identityIds));
+    expect(INITIAL_AI_ROSTER.map(({ modelId }) => modelId)).toEqual(expect.arrayContaining(Object.keys(identityIds)));
     expect(new Set(INITIAL_AI_ROSTER.map(({ displayName }) => displayName)).size).toBe(INITIAL_AI_ROSTER.length);
     expect(new Set(INITIAL_AI_ROSTER.map(({ modelId }) => aiIdentityId(modelId, AI_LEGACY_IDENTITY_VERSION))).size).toBe(INITIAL_AI_ROSTER.length);
     for (const [modelId, id] of Object.entries(identityIds)) expect(aiIdentityId(modelId, AI_LEGACY_IDENTITY_VERSION)).toBe(id);
   });
 
   it.each([
+    { modelId: "openai/gpt-6.1-terra", modelName: "GPT-6.1 Terra", displayName: "Terra AI" },
+    { modelId: "openai/gpt-5.4-mini", modelName: "GPT-5.4 Mini", displayName: "GPT Mini AI" },
+    { modelId: "nvidia/nemotron-3-ultra-550b-a55b", modelName: "Nemotron 3 Ultra", displayName: "Nemotron AI" },
+    { modelId: "xiaomi/mimo-v2.6-flash", modelName: "MiMo V2.6 Flash", displayName: "MiMo AI" },
+    { modelId: "z-ai/glm-5", modelName: "GLM 5", displayName: "GLM AI" },
     { modelId: "openai/gpt-6-luna", modelName: "GPT-6 Luna", displayName: "Luna AI" },
     { modelId: "meta-llama/llama-4-maverick", modelName: "Llama 4 Maverick", displayName: "Llama AI" },
     { modelId: "deepseek/deepseek-v4.1-flash", modelName: "DeepSeek V4.1 Flash", displayName: "DeepSeek Flash AI" }

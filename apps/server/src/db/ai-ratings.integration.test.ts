@@ -138,8 +138,8 @@ describe.skipIf(!databaseUrl)("model-bound identities and composition ratings in
 
   it("expands the roster while retaining existing identities, memory, ratings and operator disable flags", async () => {
     const store = new PostgresAiStore(pool!);
-    const newModelIds = new Set(["openai/gpt-6-luna", "meta-llama/llama-4-maverick", "deepseek/deepseek-v4.1-flash"]);
-    const inheritedRoster = INITIAL_AI_ROSTER.filter(({ modelId }) => !newModelIds.has(modelId));
+    const inheritedModelIds = new Set(["anthropic/claude-haiku-5.5", "google/gemini-3.8-flash", "deepseek/deepseek-v3.2", "qwen/qwen3.8-flash", "mistralai/mistral-small-2603"]);
+    const inheritedRoster = INITIAL_AI_ROSTER.filter(({ modelId }) => inheritedModelIds.has(modelId));
     const retiredModelId = "deepseek/deepseek-v4.1-flash-1017";
     const retiredId = aiIdentityId(retiredModelId, AI_LEGACY_IDENTITY_VERSION);
     const disabledId = aiIdentityId("deepseek/deepseek-v3.2", AI_LEGACY_IDENTITY_VERSION);
