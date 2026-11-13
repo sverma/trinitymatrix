@@ -6,13 +6,9 @@ import { useLiveBroadcast } from "./useLiveBroadcast";
 import { LiveVideo } from "./LiveVideo";
 import { shareBroadcast, watchPath } from "./LiveDirectory";
 import { WatchHand, watchCardAsset } from "./WatchHand";
+import { broadcastPlayerName, broadcastTitle, broadcastMoveSummary } from "./broadcast-names";
 
 function time(value: number) { return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
-
-function PlayerName({ name, isAi }: { name: string; isAi: boolean }) {
-  const version = isAi ? /^(.*) · (v\d+(?:\.\d+)*)$/.exec(name) : null;
-  return version ? <>{version[1]} <sub className="watch-player-version">{version[2]}</sub></> : name;
-}
 
 function WatchComments({ gameName, comments, canModerate, onComment }: { gameName: string; comments: readonly BroadcastComment[]; canModerate: boolean; onComment: (comment: BroadcastComment) => void }) {
   const [message, setMessage] = useState("");
@@ -85,7 +81,7 @@ export function WatchPage({ gameName, player: _player, onAuthenticationRequired 
   const frame = live.frame;
   const countdown = Math.max(0, Math.ceil((broadcast.availableAt - (now + live.offset)) / 1_000));
   return <section className="watch-page" aria-labelledby="watch-title">
-    <header className="watch-heading"><div><span className="eyebrow">All hands revealed · 2-minute minimum delay</span><h1 id="watch-title">{broadcast.title}</h1><p>{broadcast.playerCount} players · <strong>{broadcast.viewerCount} watching</strong> · {live.connection === "reconnecting" ? "Reconnecting…" : broadcast.status === "ended" ? "Broadcast ended" : live.paused ? "Paused recording" : "Delayed live"}</p></div>
+    <header className="watch-heading"><div><span className="eyebrow">All hands revealed · 2-minute minimum delay</span><h1 id="watch-title">{broadcastTitle(broadcast)}</h1><p>{broadcast.playerCount} players · <strong>{broadcast.viewerCount} watching</strong> · {live.connection === "reconnecting" ? "Reconnecting…" : broadcast.status === "ended" ? "Broadcast ended" : live.paused ? "Paused recording" : "Delayed live"}</p></div>
       <button className="secondary" onClick={() => { void shareBroadcast(gameName).then(setShared).catch(() => setShared(new URL(watchPath(gameName), window.location.origin).href)); }}>Share broadcast</button></header>
     {shared && <p role="status">Watch link: <a href={shared}>{shared}</a></p>}
     {live.error && <p role="alert" className="live-error">{live.error} <button onClick={live.refresh}>Refresh broadcast</button></p>}
@@ -99,21 +95,22 @@ export function WatchPage({ gameName, player: _player, onAuthenticationRequired 
         <label>Released move<input aria-label="Replay position" type="range" min={0} max={Math.max(0, live.timeline.length - 1)} value={Math.max(0, selectedIndex)} disabled={live.timeline.length < 2 || live.seeking} onChange={(event) => { const target = live.timeline[Number(event.target.value)]; if (target) { setPlaying(false); void live.seek(target.sequence); } }} /></label>
         <span aria-live="polite">Move {frame.sequence} · played at {time(frame.capturedAt)}{live.seeking ? " · Loading…" : ""}</span>
       </div>
-      {frame.winner && <div className="watch-winner" role="status"><strong><PlayerName name={frame.winner.name} isAi={frame.game.players.some((seat) => seat.id === frame.winner?.id && seat.actorKind === "ai")} /> won.</strong> {frame.winner.reason === "declaration" ? `Validated declaration${frame.winner.score === undefined ? "." : ` · ${frame.winner.score} points.`}` : frame.winner.reason === "invalid-declaration" ? "The final opponent made an invalid declaration." : "The last remaining player won."}</div>}
+      {frame.winner && <div className="watch-winner" role="status"><strong>{broadcastPlayerName({ displayName: frame.winner.name, actorKind: frame.game.players.find((seat) => seat.id === frame.winner?.id)?.actorKind ?? "human" })} won.</strong> {frame.winner.reason === "declaration" ? `Validated declaration${frame.winner.score === undefined ? "." : ` · ${frame.winner.score} points.`}` : frame.winner.reason === "invalid-declaration" ? "The final opponent made an invalid declaration." : "The last remaining player won."}</div>}
       <div className="watch-layout"><div className="watch-board" aria-label="Delayed Trinity table">
         <div className="watch-table-state"><span>Closed deck <strong>{frame.game.stockCount} cards</strong></span><span>Wild rank <strong>{frame.game.wildRank}</strong></span><span>Open deck {frame.game.topDiscard ? <img src={watchCardAsset(frame.game.topDiscard)} alt={cardLabel(frame.game.topDiscard)} /> : <strong>Empty</strong>}</span></div>
         <div className={`watch-hands watch-seats-${broadcast.playerCount}`}>{frame.game.players.map((seat) => {
           const hand = frame.hands.find((hand) => hand.playerId === seat.id) ?? { cards: [] };
           const cards = hand.cards;
-          return <section className={`watch-player-hand ${seat.id === frame.game.currentPlayerId && frame.game.phase === "playing" ? "current-turn" : ""}`} key={seat.id} aria-label={`${seat.displayName}'s revealed hand`}>
-            <header><strong><PlayerName name={seat.displayName} isAi={seat.actorKind === "ai"} /></strong><span>{seat.actorKind === "ai" ? "AI player" : "Human"} · {seat.status === "playing" ? `${cards.length} cards` : seat.status}{seat.id === frame.game.currentPlayerId && frame.game.phase === "playing" ? " · Current turn" : ""}</span></header>
+          const displayName = broadcastPlayerName(seat);
+          return <section className={`watch-player-hand ${seat.id === frame.game.currentPlayerId && frame.game.phase === "playing" ? "current-turn" : ""}`} key={seat.id} aria-label={`${displayName}'s revealed hand`}>
+            <header><strong>{displayName}</strong><span>{seat.actorKind === "ai" ? "AI player" : "Human"} · {seat.status === "playing" ? `${cards.length} cards` : seat.status}{seat.id === frame.game.currentPlayerId && frame.game.phase === "playing" ? " · Current turn" : ""}</span></header>
             {seat.aiModelId && <code>{seat.aiModelId}</code>}
-            <WatchHand hand={hand} wildRank={frame.game.wildRank} displayName={seat.displayName} />
+            <WatchHand hand={hand} wildRank={frame.game.wildRank} displayName={displayName} />
           </section>;
         })}</div>
       </div><aside className="watch-move-feed" aria-labelledby="watch-moves-title"><h2 id="watch-moves-title">Released moves</h2>
         {live.moreTimeline && <button className="secondary" disabled={live.timelineLoading} onClick={() => void live.loadEarlier()}>{live.timelineLoading ? "Loading…" : "Load earlier moves"}</button>}
-        <ol>{[...live.timeline].reverse().map((entry) => <li key={entry.sequence}><button className={entry.sequence === frame.sequence ? "active" : ""} aria-current={entry.sequence === frame.sequence ? "step" : undefined} onClick={() => { setPlaying(false); void live.seek(entry.sequence); }}><time>{time(entry.capturedAt)}</time><span>{entry.event.summary}</span></button></li>)}</ol>
+        <ol>{[...live.timeline].reverse().map((entry) => <li key={entry.sequence}><button className={entry.sequence === frame.sequence ? "active" : ""} aria-current={entry.sequence === frame.sequence ? "step" : undefined} onClick={() => { setPlaying(false); void live.seek(entry.sequence); }}><time>{time(entry.capturedAt)}</time><span>{broadcastMoveSummary(entry.event, broadcast.players)}</span></button></li>)}</ol>
       </aside></div>
     </>}
     <LiveVideo gameName={gameName} />

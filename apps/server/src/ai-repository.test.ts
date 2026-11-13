@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AI_CURRENT_IDENTITY_VERSION, AI_PROMPT_VERSION, INITIAL_AI_ROSTER, aiIdentityId } from "./ai-repository";
+import { AI_CURRENT_IDENTITY_VERSION, AI_LEGACY_IDENTITY_VERSION, AI_PROMPT_VERSION, INITIAL_AI_ROSTER, aiIdentityId } from "./ai-repository";
 
 // Published identity UUIDs must survive roster expansion and process restarts.
 const identityIds = {
@@ -15,11 +15,12 @@ const identityIds = {
 
 describe("persistent AI roster identities", () => {
   it("extends the roster without rotating the prompt or any published identity", () => {
-    expect(AI_PROMPT_VERSION).toBe("trinity-v1");
+    expect(AI_LEGACY_IDENTITY_VERSION).toBe("trinity-v1");
+    expect(AI_PROMPT_VERSION).toBe(AI_CURRENT_IDENTITY_VERSION);
     expect(INITIAL_AI_ROSTER.map(({ modelId }) => modelId)).toEqual(Object.keys(identityIds));
     expect(new Set(INITIAL_AI_ROSTER.map(({ displayName }) => displayName)).size).toBe(INITIAL_AI_ROSTER.length);
-    expect(new Set(INITIAL_AI_ROSTER.map(({ modelId }) => aiIdentityId(modelId))).size).toBe(INITIAL_AI_ROSTER.length);
-    for (const [modelId, id] of Object.entries(identityIds)) expect(aiIdentityId(modelId)).toBe(id);
+    expect(new Set(INITIAL_AI_ROSTER.map(({ modelId }) => aiIdentityId(modelId, AI_LEGACY_IDENTITY_VERSION))).size).toBe(INITIAL_AI_ROSTER.length);
+    for (const [modelId, id] of Object.entries(identityIds)) expect(aiIdentityId(modelId, AI_LEGACY_IDENTITY_VERSION)).toBe(id);
   });
 
   it.each([
@@ -32,17 +33,18 @@ describe("persistent AI roster identities", () => {
 
   it("keeps the new Flash identity separate from its retired suffixed model", () => {
     const retiredModelId = "deepseek/deepseek-v4.1-flash-1017";
-    expect(aiIdentityId(retiredModelId)).toBe("35d2355b-f6b3-50bf-a266-170f134edb33");
-    expect(aiIdentityId(retiredModelId)).not.toBe(aiIdentityId("deepseek/deepseek-v4.1-flash"));
+    expect(aiIdentityId(retiredModelId, AI_LEGACY_IDENTITY_VERSION)).toBe("35d2355b-f6b3-50bf-a266-170f134edb33");
+    expect(aiIdentityId(retiredModelId, AI_LEGACY_IDENTITY_VERSION)).not.toBe(aiIdentityId("deepseek/deepseek-v4.1-flash", AI_LEGACY_IDENTITY_VERSION));
     expect(INITIAL_AI_ROSTER.some(({ modelId }) => (modelId as string) === retiredModelId)).toBe(false);
   });
   it("creates deterministic separate competitive identities for each protocol revision", () => {
     for (const { modelId, displayName } of INITIAL_AI_ROSTER) {
       const current = aiIdentityId(modelId, AI_CURRENT_IDENTITY_VERSION);
-      expect(current).not.toBe(aiIdentityId(modelId));
+      expect(current).not.toBe(aiIdentityId(modelId, AI_LEGACY_IDENTITY_VERSION));
       expect(current).toBe(aiIdentityId(modelId, AI_CURRENT_IDENTITY_VERSION));
+      expect(aiIdentityId(modelId)).toBe(current);
       expect(current).not.toBe(aiIdentityId(modelId, "a-future-protocol-version"));
-      expect(`${displayName} · v2`.length).toBeLessThanOrEqual(24);
+      expect(displayName.length).toBeLessThanOrEqual(24);
     }
   });
 });
