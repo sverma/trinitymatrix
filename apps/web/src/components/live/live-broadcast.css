@@ -47,6 +47,7 @@
 .watch-player-hand.current-turn { border-color: var(--gold); }
 .watch-player-hand header { display: grid; gap: .3rem; }
 .watch-player-hand header strong { overflow-wrap: anywhere; }
+.watch-player-version { font-size: .65em; font-weight: 500; line-height: 0; vertical-align: sub; white-space: nowrap; }
 .watch-player-hand header span { color: var(--muted); font-size: .73rem; }
 .watch-player-hand code { display: block; margin-top: .3rem; color: var(--muted); font-size: .65rem; overflow-wrap: anywhere; }
 .watch-cards { display: flex; gap: .25rem; min-width: 0; margin: .75rem 0 .1rem; padding: .2rem 0 .5rem; overflow-x: auto; overscroll-behavior-inline: contain; list-style: none; }
