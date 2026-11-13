@@ -5,6 +5,7 @@ export default defineConfig({
     index: "src/index.ts",
     "db/migrate-cli": "src/db/migrate-cli.ts",
     "ops/ai-check": "src/ai-check-cli.ts",
+    "ops/ai-train": "src/ai-train-cli.ts",
     "ops/ai-rule-worker": "src/ai-rule-worker.ts",
     "ops/load-run": "../../tests/load/run.mjs"
   },
