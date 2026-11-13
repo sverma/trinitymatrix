@@ -1,7 +1,7 @@
 import { WebSocket as WebSocketRuntime } from "ws";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { privateRoomSchema } from "@trinitymatrix/protocol";
+import { aiForfeitNoticeSchema, privateRoomSchema } from "@trinitymatrix/protocol";
 import type {
   ClientMessage,
   MatchType,
@@ -27,6 +27,8 @@ type Connection = {
 
 type GameCommand = Extract<ClientMessage, { type: `game.${string}` }>;
 
+export type AiForfeitNotice = z.infer<typeof aiForfeitNoticeSchema>;
+
 export type ArchivedGameEvent = Readonly<{
   game: RankingGameSnapshot;
   matchType?: MatchType;
@@ -35,6 +37,7 @@ export type ArchivedGameEvent = Readonly<{
   actorPlayerId: string | null;
   commandId: string | null;
   command: GameCommand | null;
+  aiFailure?: AiForfeitNotice;
   occurredAt: Date;
 }>;
 
@@ -421,9 +424,10 @@ export class Matchmaker {
     return this.startMatch(playerIds.map((id) => this.connections.get(id)!)).id;
   }
 
-  executeAgentCommand(playerId: string, command: GameCommand): GameResult | null {
+  executeAgentCommand(playerId: string, command: GameCommand, notice?: AiForfeitNotice): GameResult | null {
     if (this.connections.get(playerId)?.actorKind !== "ai") throw new Error("An AI connection is required.");
-    return this.applyGameCommand(playerId, command);
+    if (notice && command.type !== "game.drop") throw new Error("An AI forfeit notice requires a drop command.");
+    return this.applyGameCommand(playerId, command, notice ? aiForfeitNoticeSchema.parse(notice) : undefined);
   }
 
   private startMatch(players: readonly Connection[]): RankingGame {
@@ -487,7 +491,7 @@ export class Matchmaker {
     this.broadcastQueue(playerCount);
   }
 
-  private applyGameCommand(playerId: string, command: GameCommand): GameResult | null {
+  private applyGameCommand(playerId: string, command: GameCommand, aiFailure?: AiForfeitNotice): GameResult | null {
     const game = this.gameFor(playerId);
     if (!game) {
       this.send(playerId, { type: "error", code: "NO_ACTIVE_GAME", message: "Join a queue before playing." });
@@ -518,6 +522,7 @@ export class Matchmaker {
       actorPlayerId: playerId,
       commandId: command.commandId,
       command,
+      ...(aiFailure && result.left ? { aiFailure } : {}),
       occurredAt: new Date()
     }));
     this.broadcastHands(game);
@@ -533,7 +538,8 @@ export class Matchmaker {
       this.broadcast(game, {
         type: "game.player-dropped",
         playerId: result.left.playerId,
-        playerName: result.left.playerName
+        playerName: result.left.playerName,
+        ...(aiFailure ? { reasonCode: aiFailure.code, reason: aiFailure.message } : {})
       });
     }
     if (result.ended) {

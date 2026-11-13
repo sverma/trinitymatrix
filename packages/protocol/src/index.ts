@@ -234,6 +234,11 @@ export const postGameChatMessageSchema = z.object({
 }).strict();
 export type PostGameChatMessage = z.infer<typeof postGameChatMessageSchema>;
 
+export const aiForfeitReasonCodeSchema = z.enum(["AI_UNAVAILABLE", "AI_INVALID_ACTION", "AI_BUDGET_EXHAUSTED"]);
+export type AiForfeitReasonCode = z.infer<typeof aiForfeitReasonCodeSchema>;
+export const aiForfeitNoticeSchema = z.object({ code: aiForfeitReasonCodeSchema, message: z.string().trim().min(1).max(300) }).strict();
+export type AiForfeitNotice = z.infer<typeof aiForfeitNoticeSchema>;
+
 export type ServerMessage =
   | { type: "session.ready"; playerId: string; displayName: string }
   | { type: "queue.status"; playerCount: PlayerCount; joined: number; required: number }
@@ -242,7 +247,7 @@ export type ServerMessage =
   | { type: "game.hand"; hand: Card[]; drawnCardId?: string | undefined }
   | { type: "game.declaration-rejected"; playerId: string; playerName: string; reason: string; dropped: true }
   | { type: "command.rejected"; commandId: string; code: string; message: string; revision: number }
-  | { type: "game.player-dropped"; playerId: string; playerName: string }
+  | { type: "game.player-dropped"; playerId: string; playerName: string; reasonCode?: AiForfeitReasonCode | undefined; reason?: string | undefined }
   | { type: "game.left"; gameId: string; outcome: "dropped" }
   | { type: "game.ended"; winnerId: string; winnerName: string; reason: "declaration" | "invalid-declaration" | "player-dropped"; score?: number | undefined }
   | { type: "chat.message"; gameName: string; message: PostGameChatMessage }
@@ -266,7 +271,8 @@ export const serverMessageSchema: z.ZodType<ServerMessage> = z.discriminatedUnio
   }).strict(),
   z.object({ type: z.literal("private.room-status"), room: privateRoomSchema }).strict(),
   z.object({ type: z.literal("private.invitation"), invitation: privateInvitationSchema }).strict(),
-  z.object({ type: z.literal("game.player-dropped"), playerId: z.string(), playerName: z.string() }).strict(),
+  z.object({ type: z.literal("game.player-dropped"), playerId: z.string(), playerName: z.string(),
+    reasonCode: aiForfeitReasonCodeSchema.optional(), reason: z.string().min(1).max(300).optional() }).strict(),
   z.object({ type: z.literal("game.left"), gameId: z.string().uuid(), outcome: z.literal("dropped") }).strict(),
   z.object({ type: z.literal("command.rejected"), commandId: z.string(), code: z.string(), message: z.string(), revision: z.number().int() }).strict(),
   z.object({

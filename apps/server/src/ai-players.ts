@@ -1,17 +1,24 @@
 import { randomUUID } from "node:crypto";
 import { clientMessageSchema, type ClientMessage, type ServerMessage } from "@trinitymatrix/protocol";
-import { Matchmaker, type GameplaySocket } from "./matchmaker";
+import { Matchmaker, type GameplaySocket, type AiForfeitNotice } from "./matchmaker";
 import type { AiIdentity, AiStore } from "./ai-repository";
-import type { AiAgentDecision, AiAgentDecisionResult, AiAgentObservation } from "./ai-openrouter";
+import { AI_MAX_DECISION_TIME_MS, OpenRouterAgentError, type AiAgentDecision, type AiAgentDecisionResult, type AiAgentObservation } from "./ai-openrouter";
 
 type GameCommand = Extract<ClientMessage, { type: `game.${string}` }>;
 type ModelClient = {
-  decide(input: { modelId: string; observation: AiAgentObservation; memory: string }): Promise<AiAgentDecisionResult>;
+  decide(input: { modelId: string; observation: AiAgentObservation; memory: string; timeoutMs?: number }): Promise<AiAgentDecisionResult>;
   cancelAll?(): void;
 };
 type Agent = {
   identity: AiIdentity; socket: GameplaySocket; timer: NodeJS.Timeout | null; flight: Promise<void> | null;
   history: string[]; gameId: string | null; blockedGameId: string | null; lastRevision: number; failures: number; feedback: string;
+  failureRevision: number; pausedRevision: number; failedTurnDeadline: number; failedTurns: number;
+};
+
+export type AiOperationContext = {
+  gameId: string; modelId: string; revision: number; phase: string; handCount: number;
+  attempt?: number; requestId?: string; errorCode?: string; httpStatus?: number; finishReason?: string;
+  elapsedMs?: number; remainingMs?: number; costUsd?: number | null;
 };
 
 export function decisionCommand(decision: AiAgentDecision, observation: AiAgentObservation): GameCommand {
@@ -41,7 +48,7 @@ export class AiPlayers {
     private readonly store: AiStore,
     private readonly client: ModelClient | null,
     readonly dailyBudgetUsd: number,
-    private readonly report: (code: string, agentId?: string) => void = () => undefined,
+    private readonly report: (code: string, agentId?: string, context?: AiOperationContext) => void = () => undefined,
     private readonly options: { availableModels?: readonly string[]; actionDelayMs?: number; fetch?: typeof fetch } = {}
   ) {}
 
@@ -61,7 +68,8 @@ export class AiPlayers {
           send: (raw) => this.onMessage(agent, JSON.parse(raw) as ServerMessage),
           close: () => { socket.readyState = 3; }
         };
-        agent = { identity, socket, timer: null, flight: null, history: [], gameId: null, blockedGameId: null, lastRevision: -1, failures: 0, feedback: "" };
+        agent = { identity, socket, timer: null, flight: null, history: [], gameId: null, blockedGameId: null, lastRevision: -1, failures: 0, feedback: "",
+          failureRevision: -1, pausedRevision: -1, failedTurnDeadline: 0, failedTurns: 0 };
         this.agents.set(identity.id, agent);
         this.matchmaker.register({ playerId: identity.id, displayName: identity.displayName, badgeId: "strategist",
           actorKind: "ai", aiModelId: identity.modelId, socket });
@@ -106,7 +114,7 @@ export class AiPlayers {
           && Number.isFinite(completion) && prompt <= 0.000001 && completion <= 0.000005
           && Number(model.pricing?.request ?? 0) === 0;
       }).map(({ id }) => id));
-    } catch { if (!this.stopped && this.catalogController === controller) { this.availableModels.clear(); this.report("catalog-unavailable"); } }
+    } catch { if (!this.stopped && this.catalogController === controller) this.report("catalog-unavailable"); }
     finally { clearTimeout(timeout); if (this.catalogController === controller) this.catalogController = null; }
   }
 
@@ -146,11 +154,12 @@ export class AiPlayers {
     if (message.type === "game.started" || message.type === "game.state") {
       if (agent.gameId !== message.gameId) {
         agent.gameId = message.gameId; agent.blockedGameId = null; agent.history = []; agent.lastRevision = -1; agent.failures = 0; agent.feedback = "";
+        agent.failureRevision = -1; agent.pausedRevision = -1; agent.failedTurnDeadline = 0; agent.failedTurns = 0;
       }
       if (message.revision !== agent.lastRevision) {
         agent.history.push(JSON.stringify({ revision: message.revision, currentPlayerId: message.currentPlayerId,
           topDiscard: message.topDiscard, players: message.players.map(({ id, cardCount, status }) => ({ id, cardCount, status })) }));
-        agent.history = agent.history.slice(-12);
+        agent.history = agent.history.slice(-6);
         agent.lastRevision = message.revision;
       }
     }
@@ -166,7 +175,7 @@ export class AiPlayers {
       const flight = this.takeTurn(agent).catch(() => {
         this.report("agent-turn-failed", agent.identity.id);
         // Persistence failures must not create a repeated paid-inference loop.
-        this.forfeit(agent, gameId);
+        this.forfeit(agent, gameId, { code: "AI_UNAVAILABLE", message: "The AI could not continue because its game service became unavailable." });
       });
       agent.flight = flight;
       this.pending.add(flight);
@@ -180,7 +189,7 @@ export class AiPlayers {
 
   private actionable(agent: Agent): AiAgentObservation | null {
     const view = this.matchmaker.agentView(agent.identity.id);
-    if (!view || view.state.phase === "finished" || view.state.gameId === agent.blockedGameId) return null;
+    if (!view || view.state.phase === "finished" || view.state.gameId === agent.blockedGameId || view.state.revision === agent.pausedRevision) return null;
     const ownSeat = view.state.players.find(({ id }) => id === agent.identity.id);
     const showdown = view.state.phase === "showdown" && view.state.showdown?.pendingPlayerIds.includes(agent.identity.id);
     if (!showdown && (view.state.phase !== "playing" || ownSeat?.status !== "playing" || view.state.currentPlayerId !== agent.identity.id)) return null;
@@ -189,7 +198,9 @@ export class AiPlayers {
     })) }, publicHistory: [...agent.history, ...(agent.feedback ? [agent.feedback] : [])] };
   }
 
-  private forfeit(agent: Agent, gameId = agent.gameId): void {
+  private forfeit(agent: Agent, gameId = agent.gameId, notice: AiForfeitNotice = {
+    code: "AI_UNAVAILABLE", message: "The AI could not continue because its selected model is unavailable."
+  }): void {
     if (this.stopped || !gameId) return;
     const view = this.matchmaker.agentView(agent.identity.id);
     if (!view || view.state.gameId !== gameId) return;
@@ -200,10 +211,41 @@ export class AiPlayers {
       try {
         this.matchmaker.executeAgentCommand(agent.identity.id, {
           type: "game.drop", commandId: randomUUID(), gameId: view.state.gameId, expectedRevision: view.state.revision
-        });
+        }, notice);
       } catch { this.report("agent-forfeit-failed", agent.identity.id); }
     }
     // Existing showdown deadlines handle a missing final-layout submission.
+  }
+
+  private remainingTime(observation: AiAgentObservation): number {
+    const deadline = observation.state.phase === "showdown" ? observation.state.showdown?.endsAt : observation.state.turnEndsAt;
+    return Math.max(0, (deadline ?? 0) - Date.now() - 1_000);
+  }
+
+  private recover(agent: Agent, observation: AiAgentObservation, errorCode: string, feedback: string): void {
+    if (this.stopped || !this.isCurrent(observation)) return;
+    if (agent.failureRevision !== observation.state.revision) { agent.failureRevision = observation.state.revision; agent.failures = 0; }
+    agent.failures += 1;
+    agent.feedback = `${feedback} Current hand has ${observation.hand.length} cards. Follow the action and card IDs in the response schema.`;
+    if (agent.failures < 2 && this.remainingTime(observation) > 1_000) return;
+    agent.pausedRevision = observation.state.revision;
+    if (observation.state.phase === "showdown") { agent.blockedGameId = observation.state.gameId; return; }
+    // Treat an inference miss like a human turn timeout. It must not be an
+    // immediate surrender or a secret replacement strategy.
+    if (agent.failedTurnDeadline !== observation.state.turnEndsAt) {
+      agent.failedTurnDeadline = observation.state.turnEndsAt;
+      agent.failedTurns += 1;
+    }
+    this.report("ai-turn-paused", agent.identity.id, { gameId: observation.state.gameId, modelId: agent.identity.modelId,
+      revision: observation.state.revision, phase: observation.state.phase, handCount: observation.hand.length,
+      attempt: agent.failures, errorCode, remainingMs: this.remainingTime(observation) });
+    if (agent.failedTurns >= 3) {
+      this.lastError.set(agent.identity.id, Date.now());
+      this.forfeit(agent, observation.state.gameId, {
+        code: errorCode === "server-rejected" || errorCode === "invalid-command" ? "AI_INVALID_ACTION" : "AI_UNAVAILABLE",
+        message: "The AI could not complete three consecutive turns after retrying its selected model."
+      });
+    }
   }
 
   private async takeTurn(agent: Agent): Promise<void> {
@@ -211,26 +253,50 @@ export class AiPlayers {
     if (!observation) return;
     const identity = (await this.store.listAgents()).find(({ id }) => id === agent.identity.id);
     if (this.stopped) return;
-    if (!this.client || !identity?.enabled || !this.availableModels.has(identity.modelId)) { this.forfeit(agent, observation.state.gameId); return; }
+    if (!this.client || !identity?.enabled) { this.forfeit(agent, observation.state.gameId); return; }
     if (!this.isCurrent(observation)) return;
+    if (this.remainingTime(observation) <= 1_000) { this.recover(agent, observation, "turn-deadline", "The turn deadline is too close for another model request."); return; }
     const requestId = await this.store.reserveRequest(identity.id, identity.modelId, this.dailyBudgetUsd);
     if (this.stopped) return;
-    if (!requestId) { this.forfeit(agent, observation.state.gameId); return; }
+    if (!requestId) { this.forfeit(agent, observation.state.gameId, {
+      code: "AI_BUDGET_EXHAUSTED", message: "The AI stopped because the shared daily inference budget was reached."
+    }); return; }
     if (!this.isCurrent(observation)) {
       await this.store.finishRequest(requestId, 0, false);
       return;
     }
+    const timeoutMs = Math.min(AI_MAX_DECISION_TIME_MS, this.remainingTime(observation));
+    if (timeoutMs <= 1_000) {
+      await this.store.finishRequest(requestId, 0, false);
+      this.recover(agent, observation, "turn-deadline", "The turn deadline is too close for another model request.");
+      return;
+    }
     let result: AiAgentDecisionResult;
+    const started = Date.now();
     try {
-      result = await this.client.decide({ modelId: identity.modelId, observation, memory: identity.memory });
-    } catch {
+      result = await this.client.decide({ modelId: identity.modelId, observation, memory: identity.memory, timeoutMs });
+    } catch (error) {
       // A shutdown leaves its already-durable reservation intact at unknown cost.
       // Avoid starting a new database operation after cancellation/teardown.
       if (this.stopped) return;
-      await this.store.finishRequest(requestId, null, false);
-      this.lastError.set(identity.id, Date.now());
-      this.report("model-unavailable", identity.id);
-      this.forfeit(agent, observation.state.gameId);
+      const known = error instanceof OpenRouterAgentError ? error : null;
+      const costUsd = known?.metadata.usage?.costUsd ?? null;
+      await this.store.finishRequest(requestId, costUsd, false);
+      const errorCode = known?.code ?? "provider-unavailable";
+      this.report("model-request-failed", identity.id, {
+        gameId: observation.state.gameId, modelId: identity.modelId, revision: observation.state.revision,
+        phase: observation.state.phase, handCount: observation.hand.length, requestId,
+        attempt: (agent.failureRevision === observation.state.revision ? agent.failures : 0) + 1,
+        errorCode, elapsedMs: Date.now() - started, remainingMs: this.remainingTime(observation), costUsd,
+        ...(known?.metadata.status === undefined ? {} : { httpStatus: known.metadata.status }),
+        ...(known?.metadata.finishReason === undefined ? {} : { finishReason: known.metadata.finishReason })
+      });
+      const permanentAccessFailure = errorCode === "http-error" && [401, 402, 403].includes(known?.metadata.status ?? 0);
+      if (errorCode === "model-mismatch" || errorCode === "configuration" || permanentAccessFailure) {
+        this.lastError.set(identity.id, Date.now());
+        this.forfeit(agent, observation.state.gameId, { code: "AI_UNAVAILABLE",
+          message: permanentAccessFailure ? "The AI could not continue because its model provider denied access." : "The AI could not continue with its configured model." });
+      } else this.recover(agent, observation, errorCode, `The previous model response failed: ${errorCode}. Please return a complete valid decision.`);
       return;
     }
     if (this.stopped) return;
@@ -245,16 +311,27 @@ export class AiPlayers {
     }
     let command: GameCommand;
     try { command = decisionCommand(result.decision, observation); }
-    catch { agent.failures += 1; agent.feedback = "Your last response was not a valid game command. Follow the required action shape.";
-      if (agent.failures >= 2) this.forfeit(agent, observation.state.gameId); return; }
+    catch {
+      this.report("model-action-rejected", identity.id, { gameId: observation.state.gameId, modelId: identity.modelId,
+        revision: observation.state.revision, phase: observation.state.phase, handCount: observation.hand.length,
+        requestId, errorCode: "invalid-command", attempt: (agent.failureRevision === observation.state.revision ? agent.failures : 0) + 1 });
+      this.recover(agent, observation, "invalid-command", "Your last response was not a valid game command."); return;
+    }
     const applied = this.matchmaker.executeAgentCommand(identity.id, command);
     if (applied?.accepted) {
       agent.failures = 0; agent.feedback = "";
+      agent.failureRevision = -1;
+      if (command.type === "game.discard" || (command.type === "game.declare" && !applied.dropped)) {
+        agent.failedTurns = 0; agent.failedTurnDeadline = 0;
+      }
       await this.store.saveMemory(identity.id, result.decision.memory);
     } else {
-      agent.failures += 1;
-      agent.feedback = applied && !applied.accepted ? `The server rejected your action: ${applied.message}` : "The game has ended.";
-      if (agent.failures >= 2) this.forfeit(agent, observation.state.gameId);
+      this.report("model-action-rejected", identity.id, { gameId: observation.state.gameId, modelId: identity.modelId,
+        revision: observation.state.revision, phase: observation.state.phase, handCount: observation.hand.length,
+        requestId, errorCode: applied && !applied.accepted ? applied.code : "game-ended",
+        attempt: (agent.failureRevision === observation.state.revision ? agent.failures : 0) + 1 });
+      this.recover(agent, observation, "server-rejected", applied && !applied.accepted
+        ? `The server rejected your action: ${applied.message}` : "The game has ended.");
     }
   }
 

@@ -8,7 +8,7 @@ import {
   type OrganizedHandGroup,
   type OrganizedMeldKind
 } from "@trinitymatrix/game-domain";
-import type { Card, PostGameChatMessage } from "@trinitymatrix/protocol";
+import { aiForfeitNoticeSchema, type Card, type PostGameChatMessage } from "@trinitymatrix/protocol";
 import {
   RepositoryConflictError,
   RepositoryNotFoundError,
@@ -159,6 +159,10 @@ function redactPrivatePayload(value: unknown, seen = new WeakSet<object>()): unk
 
 function eventSummary(event: GameEventRecord, names: ReadonlyMap<string, string>): string {
   const actor = event.actorUserId ? names.get(event.actorUserId) : undefined;
+  if (event.eventType === "game.drop") {
+    const aiFailure = aiForfeitNoticeSchema.safeParse(event.payload?.aiFailure);
+    if (aiFailure.success) return `${actor ?? "AI player"} forfeited. ${aiFailure.data.message}`;
+  }
   const label = event.eventType.replace(/[._-]+/g, " ").trim();
   return actor ? `${actor}: ${label}` : label.charAt(0).toUpperCase() + label.slice(1);
 }

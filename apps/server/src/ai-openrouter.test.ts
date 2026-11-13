@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Card } from "@trinitymatrix/protocol";
+import { validateDeclaration } from "@trinitymatrix/game-domain";
 import {
   AI_MAX_OUTPUT_TOKENS,
+  AI_MAX_DECISION_TIME_MS,
   AI_MAX_REQUEST_BYTES,
   AI_MAX_RESPONSE_BYTES,
   AI_REQUEST_RESERVATION_USD,
@@ -48,6 +50,21 @@ function observation(): AiAgentObservation {
 
 function decision(overrides: Partial<AiAgentDecision> = {}): AiAgentDecision {
   return { action: "draw-stock", cardId: null, groups: [], memory: "Prioritize a natural 21.", ...overrides };
+}
+
+function drawnObservation(): AiAgentObservation {
+  const view = observation();
+  view.hand = [...view.hand, { ...view.hand[0]!, id: "own-13" }];
+  view.state.players[0]!.cardCount = 14;
+  return view;
+}
+
+function showdownObservation(): AiAgentObservation {
+  const view = observation();
+  view.state.phase = "showdown";
+  view.state.players[1]!.status = "declared";
+  view.state.showdown = { declarerId: otherId, pendingPlayerIds: [playerId], submittedPlayerIds: [], endsAt: Date.now() + 45_000 };
+  return view;
 }
 
 function providerBody(value: unknown = decision(), overrides: Record<string, unknown> = {}) {
@@ -100,8 +117,10 @@ describe("model-bound OpenRouter player", () => {
     { id: "deepseek/deepseek-v4.1-flash-1017", reasoning: { effort: "low", exclude: true } },
     { id: "mistralai/mistral-large-4-0", reasoning: { enabled: false, exclude: true } },
     { id: "qwen/qwen3.8-flash", reasoning: { max_tokens: 256, exclude: true } },
-    { id: "anthropic/claude-haiku-5.5", reasoning: undefined },
-    { id: "google/gemini-3.8-flash", reasoning: undefined },
+    { id: "anthropic/claude-haiku-5.5", reasoning: { enabled: false, exclude: true } },
+    { id: "deepseek/deepseek-v3.2", reasoning: { enabled: false, exclude: true } },
+    { id: "deepseek/deepseek-v3.2-exp", reasoning: undefined },
+    { id: "google/gemini-3.8-flash", reasoning: { effort: "low", exclude: true } },
     { id: "deepseek/other-model", reasoning: undefined },
     { id: "mistralai/other-model", reasoning: undefined },
     { id: "qwen/other-model", reasoning: undefined }
@@ -143,42 +162,181 @@ describe("model-bound OpenRouter player", () => {
   it("does not substitute a provider-selected alternative model", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision(), { model: "example/other-model" })));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await expect(client.decide({ modelId, observation: observation(), memory: "" })).rejects.toMatchObject({ code: "model-mismatch" });
+    await expect(client.decide({ modelId, observation: observation(), memory: "" })).rejects.toMatchObject({
+      code: "model-mismatch", metadata: { status: 200, usage: { costUsd: 0.0015 } }
+    });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
   it.each([
-    { ...decision(), action: "drop" },
-    { ...decision(), secret: "not a schema field" },
-    decision({ memory: "x".repeat(4_001) }),
-    decision({ action: "discard", cardId: "another-players-card" }),
-    decision({ action: "declare", cardId: "own-0", groups: [["own-1", "own-1", "own-2"]] }),
-    decision({ action: "declare", cardId: "own-0", groups: [["own-0", "own-1", "own-2"]] }),
-    decision({ action: "draw-discard", cardId: "own-0" }),
-    decision({ action: "submit-hand", groups: [["own-0"]] })
-  ])("rejects malformed or unowned card decisions", async (invalidDecision) => {
-    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(invalidDecision)));
+    { value: { ...decision(), action: "drop" }, code: "invalid-decision" },
+    { value: { ...decision(), secret: "not a schema field" }, code: "invalid-decision" },
+    { value: decision({ memory: "x".repeat(4_001) }), code: "invalid-decision" },
+    { value: decision({ action: "discard", cardId: "another-players-card" }), code: "invalid-card-reference" },
+    { value: decision({ action: "declare", cardId: "own-0", groups: [["own-1", "own-1", "own-2"]] }), code: "invalid-card-reference" },
+    { value: decision({ action: "declare", cardId: "own-0", groups: [["own-0", "own-1", "own-2"]] }), code: "invalid-decision" },
+    { value: decision({ action: "draw-discard", cardId: "own-0" }), code: "invalid-decision" },
+    { value: decision({ action: "submit-hand", groups: [["own-0"]] }), code: "invalid-decision" }
+  ])("rejects malformed or unowned card decisions with safe costs", async ({ value, code }) => {
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(value)));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await expect(client.decide({ modelId, observation: observation(), memory: "" })).rejects.toMatchObject({ code: "invalid-response" });
+    await expect(client.decide({ modelId, observation: observation(), memory: "" })).rejects.toMatchObject({
+      code, metadata: { status: 200, finishReason: "stop", usage: { costUsd: 0.0015, promptTokens: 1000, completionTokens: 100 } }
+    });
   });
 
   it("leaves model-chosen declaration legality to the authoritative game validator", async () => {
     // A deliberately incomplete/illegal declaration must not be solved or rewritten here.
-    const chosen = decision({ action: "declare", cardId: "own-0", groups: [["own-1", "own-2", "own-3"]] });
+    const view = drawnObservation();
+    const chosen = decision({ action: "declare", cardId: "own-13", groups: [view.hand.slice(0, -1).map(({ id }) => id)] });
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(chosen)));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    expect((await client.decide({ modelId, observation: observation(), memory: "" })).decision).toEqual(chosen);
+    expect((await client.decide({ modelId, observation: view, memory: "" })).decision).toEqual(chosen);
+    expect(validateDeclaration(view.hand, chosen.cardId!, chosen.groups, view.state.wildRank).valid).toBe(false);
   });
 
   it.each([
-    { choices: [{ finish_reason: "length", message: { content: JSON.stringify(decision()) } }] },
-    { choices: [{ finish_reason: "stop", message: { content: null, refusal: "Cannot play" } }] },
-    { choices: [{ finish_reason: "stop", message: { content: "not json" } }] },
-    { error: { message: apiKey }, choices: [] }
-  ])("rejects truncated, refused or malformed provider output", async (overrides) => {
+    { overrides: { choices: [{ finish_reason: "length", message: { content: JSON.stringify(decision()) } }] }, code: "truncated-response" },
+    { overrides: { choices: [{ finish_reason: "stop", message: { content: null, refusal: "Cannot play" } }] }, code: "refused-response" },
+    { overrides: { choices: [{ finish_reason: "stop", message: { content: "not json" } }] }, code: "invalid-json" },
+    { overrides: { error: { message: apiKey }, choices: [] }, code: "invalid-response" }
+  ])("distinguishes truncated, refused and malformed output while retaining known usage", async ({ overrides, code }) => {
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision(), overrides)));
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
-    await expect(client.decide({ modelId, observation: observation(), memory: "" })).rejects.toMatchObject({ code: "invalid-response" });
+    await expect(client.decide({ modelId, observation: observation(), memory: "" })).rejects.toMatchObject({
+      code, metadata: { status: 200, usage: { costUsd: 0.0015 } }
+    });
+  });
+
+  it.each([
+    { view: observation(), actions: ["draw-stock"], cardRequired: false, move: decision() },
+    { view: drawnObservation(), actions: ["discard", "declare"], cardRequired: true,
+      move: decision({ action: "discard", cardId: "own-13" }) },
+    { view: showdownObservation(), actions: ["submit-hand"], cardRequired: false,
+      move: decision({ action: "submit-hand", groups: [hand.map(({ id }) => id)] }) }
+  ])("constrains legal actions and exact owned IDs for each draw/discard/showdown stage", async ({ view, actions, cardRequired, move }) => {
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(move)));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await client.decide({ modelId, observation: view, memory: "" });
+    const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+    const schema = body.response_format.json_schema.schema;
+    expect(schema.properties.action.enum).toEqual(actions);
+    expect(schema.properties.cardId.type).toEqual(cardRequired ? "string" : ["string", "null"]);
+    if (cardRequired) expect(schema.properties.cardId.enum).toEqual(view.hand.map(({ id }) => id));
+    else expect(schema.properties.cardId).not.toHaveProperty("enum");
+    expect(schema.properties.groups).toMatchObject({ maxItems: 14, items: {
+      minItems: cardRequired ? 3 : 1, maxItems: 14, items: { enum: view.hand.map(({ id }) => id) }
+    } });
+    expect(schema.properties.memory.description).toContain("at most 512 characters");
+    expect(schema.properties.memory).not.toHaveProperty("maxLength");
+  });
+
+  it("uses Gemini-compatible nullable string transport for a draw while still requiring actual null locally", async () => {
+    const geminiId = "google/gemini-3.8-flash";
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      const cardSchema = body.response_format.json_schema.schema.properties.cardId;
+      if (cardSchema.type === "null" || cardSchema.enum?.includes(null)) return new Response("Unsupported null-only schema", { status: 400 });
+      expect(cardSchema.type).toEqual(["string", "null"]);
+      expect(cardSchema.description).toContain("Return null");
+      return jsonResponse(providerBody(decision(), { model: geminiId }));
+    });
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await expect(client.decide({ modelId: geminiId, observation: observation(), memory: "" }))
+      .resolves.toMatchObject({ modelId: geminiId, decision: { action: "draw-stock", cardId: null } });
+    fetcher.mockImplementation(async () => jsonResponse(providerBody(decision({ cardId: "own-0" }), { model: geminiId })));
+    await expect(client.decide({ modelId: geminiId, observation: observation(), memory: "" }))
+      .rejects.toMatchObject({ code: "invalid-decision" });
+  });
+
+  it("omits Gemini-incompatible array bounds while retaining exact action and owned-card enums", async () => {
+    const geminiId = "google/gemini-3.8-flash";
+    const view = drawnObservation();
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      const schema = body.response_format.json_schema.schema;
+      const nodes: unknown[] = [schema];
+      while (nodes.length) {
+        const node = nodes.pop();
+        if (!node || typeof node !== "object") continue;
+        expect(node).not.toHaveProperty("minItems");
+        expect(node).not.toHaveProperty("maxItems");
+        nodes.push(...Object.values(node));
+      }
+      expect(schema.properties.action.enum).toEqual(["discard", "declare"]);
+      expect(schema.properties.cardId.enum).toEqual(view.hand.map(({ id }) => id));
+      expect(schema.properties.groups.items.items.enum).toEqual(view.hand.map(({ id }) => id));
+      return jsonResponse(providerBody(decision({ action: "discard", cardId: "own-13" }), { model: geminiId }));
+    });
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await expect(client.decide({ modelId: geminiId, observation: view, memory: "" }))
+      .resolves.toMatchObject({ decision: { action: "discard", cardId: "own-13" } });
+    fetcher.mockImplementation(async () => jsonResponse(providerBody(decision({
+      action: "discard", cardId: "own-13", groups: Array.from({ length: 15 }, () => ["own-0"])
+    }), { model: geminiId })));
+    await expect(client.decide({ modelId: geminiId, observation: view, memory: "" }))
+      .rejects.toMatchObject({ code: "invalid-decision" });
+  });
+
+  it.each(["anthropic/claude-haiku-5.5", "deepseek/deepseek-v3.2", "qwen/qwen3.8-flash", "mistralai/mistral-small-2603"])(
+    "preserves array bounds and declaration-group minimum for %s", async (id) => {
+      const view = drawnObservation();
+      const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision({ action: "discard", cardId: "own-13" }), { model: id })));
+      const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+      await client.decide({ modelId: id, observation: view, memory: "" });
+      const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+      expect(body.response_format.json_schema.schema.properties.groups).toMatchObject({ maxItems: 14, items: { minItems: 3, maxItems: 14 } });
+    }
+  );
+
+  it("offers discard-pile drawing only when a visible card exists", async () => {
+    const view = observation();
+    view.state.topDiscard = { ...hand[0]!, id: "visible-discard" };
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision({ action: "draw-discard" }))));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await client.decide({ modelId, observation: view, memory: "" });
+    const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+    expect(body.response_format.json_schema.schema.properties.action.enum).toEqual(["draw-stock", "draw-discard"]);
+  });
+
+  it.each(["draw", "discard"])("ignores harmless owned layout groups on a %s without changing the selected action or card", async (stage) => {
+    const view = stage === "draw" ? observation() : drawnObservation();
+    const chosen = stage === "draw" ? decision({ groups: [["own-0", "own-1", "own-2"]] })
+      : decision({ action: "discard", cardId: "own-11", groups: [["own-0", "own-1", "own-2"], ["own-11"]] });
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(chosen)));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    const result = await client.decide({ modelId, observation: view, memory: "" });
+    expect(result.decision).toEqual({ ...chosen, groups: [] });
+  });
+
+  it("rejects wrong-stage actions even when the provider ignores its structured schema", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision())));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await expect(client.decide({ modelId, observation: drawnObservation(), memory: "" }))
+      .rejects.toMatchObject({ code: "invalid-decision", metadata: { usage: { costUsd: 0.0015 } } });
+  });
+
+  it("does not infer from an off-turn observation", async () => {
+    const view = observation();
+    view.state.currentPlayerId = otherId;
+    const fetcher = vi.fn<typeof fetch>();
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await expect(client.decide({ modelId, observation: view, memory: "" })).rejects.toMatchObject({ code: "invalid-observation" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("does not expose arbitrary provider finish reasons in safe diagnostic metadata", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision(), {
+      choices: [{ finish_reason: `private diagnostic ${apiKey}`, message: { content: "" } }]
+    })));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    try {
+      await client.decide({ modelId, observation: observation(), memory: "" });
+      throw new Error("Expected rejection");
+    } catch (error) {
+      expect(error).toMatchObject({ code: "invalid-response", metadata: { finishReason: "unknown", usage: { costUsd: 0.0015 } } });
+      expect(JSON.stringify(error)).not.toContain(apiKey);
+    }
   });
 
   it("keeps missing or invalid usage costs unknown for conservative reservation accounting", async () => {
@@ -198,6 +356,7 @@ describe("model-bound OpenRouter player", () => {
       throw new Error("Expected rejection");
     } catch (error) {
       expect(error).toBeInstanceOf(OpenRouterAgentError);
+      expect(error).toMatchObject({ code: "http-error", metadata: { status: 503 } });
       expect(String(error)).not.toContain(apiKey);
       expect(String(error)).not.toContain("diagnostic");
     }
@@ -219,6 +378,57 @@ describe("model-bound OpenRouter player", () => {
     const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher, timeoutMs: 10 });
     await expect(client.decide({ modelId, observation: observation(), memory: "" })).rejects.toMatchObject({ code: "timeout" });
     expect(signal?.aborted).toBe(true);
+  });
+
+  it.each([
+    { configured: AI_MAX_DECISION_TIME_MS, requested: 5, effective: 5 },
+    { configured: 5, requested: AI_MAX_DECISION_TIME_MS, effective: 5 }
+  ])("honors the shorter per-call deadline and constructor upper bound", async ({ configured, requested, effective }) => {
+    vi.useFakeTimers();
+    try {
+      let signal: AbortSignal | null | undefined;
+      const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+        signal = init?.signal;
+        return await new Promise<Response>(() => undefined);
+      });
+      const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher, timeoutMs: configured });
+      const waiting = expect(client.decide({ modelId, observation: observation(), memory: "", timeoutMs: requested }))
+        .rejects.toMatchObject({ code: "timeout" });
+      await vi.advanceTimersByTimeAsync(effective - 1);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await waiting;
+      expect(signal?.aborted).toBe(true);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([0, AI_MAX_DECISION_TIME_MS + 1, NaN, 1.5])("rejects an invalid per-call timeout before contacting the provider", async (timeoutMs) => {
+    const fetcher = vi.fn<typeof fetch>();
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await expect(client.decide({ modelId, observation: observation(), memory: "", timeoutMs }))
+      .rejects.toMatchObject({ code: "configuration" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("defaults to the bounded 20-second decision window", async () => {
+    vi.useFakeTimers();
+    try {
+      let signal: AbortSignal | null | undefined;
+      const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+        signal = init?.signal;
+        return await new Promise<Response>(() => undefined);
+      });
+      const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+      const waiting = expect(client.decide({ modelId, observation: observation(), memory: "" }))
+        .rejects.toMatchObject({ code: "timeout" });
+      expect(AI_MAX_DECISION_TIME_MS).toBe(20_000);
+      await vi.advanceTimersByTimeAsync(AI_MAX_DECISION_TIME_MS - 1);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await waiting;
+      expect(signal?.aborted).toBe(true);
+    } finally { vi.useRealTimers(); }
   });
 
   it("cancels pending requests immediately while permitting later requests after a restart", async () => {

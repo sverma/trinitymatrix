@@ -87,6 +87,16 @@ describe("GameTable", () => {
     expect(screen.getByText("Results at this table count toward mixed-match ratings.")).toBeInTheDocument();
   });
 
+  it("shows the actual AI technical forfeit cause in the result dialog", () => {
+    const current = game(13);
+    const technical = { playerId: "p2", playerName: "Model One", reasonCode: "AI_UNAVAILABLE" as const, reason: "The selected model was unavailable for several turns." };
+    render(<GameTable {...actions} game={current} hand={[]} playerId="p1" notice="Round complete." aiForfeits={[technical]} winner={{ id: "p1", name: "Asha", reason: "player-dropped", technicalForfeit: technical }} />);
+    const dialog = screen.getByRole("dialog", { name: "You won!" });
+    expect(within(dialog).getByText(`Model One forfeited. ${technical.reason}`)).toBeInTheDocument();
+    expect(within(dialog).queryByText("Another player dropped, so the last active player won the round.")).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "AI player availability" })).toHaveTextContent(technical.reason);
+  });
+
   it("plays distinct cues as the local turn starts and ends, with a mute control", async () => {
     Object.values(turnSoundMocks).forEach((mock) => mock.mockClear());
     const user = userEvent.setup();

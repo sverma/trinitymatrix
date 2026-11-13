@@ -8,7 +8,7 @@ import type {
   ServerMessage
 } from "@trinitymatrix/protocol";
 import { parseServerMessage } from "@trinitymatrix/protocol";
-import type { RealtimeChatMessage } from "../api";
+import type { AiPlayerForfeit, RealtimeChatMessage } from "../api";
 
 type ConnectionState = "connecting" | "connected" | "disconnected" | "authentication-required" | "session-replaced";
 const heartbeatIntervalMs = 20_000;
@@ -22,6 +22,7 @@ export function useGameSocket(enabled: boolean, onAuthenticationRequired?: (reas
   const authenticatedPlayerId = useRef<string | null>(null);
   const currentGameName = useRef<string | null>(null);
   const activeGameId = useRef<string | null>(null);
+  const lastTechnicalDrop = useRef<AiPlayerForfeit | null>(null);
   const viewedPrivateRoom = useRef<PrivateRoom | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [queue, setQueue] = useState<{ joined: number; required: number; playerCount: PlayerCount } | null>(null);
@@ -34,7 +35,9 @@ export function useGameSocket(enabled: boolean, onAuthenticationRequired?: (reas
     name: string;
     reason: "declaration" | "invalid-declaration" | "player-dropped";
     score?: number | undefined;
+    technicalForfeit?: AiPlayerForfeit;
   } | null>(null);
+  const [aiForfeits, setAiForfeits] = useState<AiPlayerForfeit[]>([]);
   const [completedGameName, setCompletedGameName] = useState<string | null>(null);
   const [realtimeChatMessages, setRealtimeChatMessages] = useState<RealtimeChatMessage[]>([]);
   const [connectionGeneration, setConnectionGeneration] = useState(0);
@@ -57,6 +60,8 @@ export function useGameSocket(enabled: boolean, onAuthenticationRequired?: (reas
       setConnectionGeneration(0);
       viewedPrivateRoom.current = null;
       activeGameId.current = null;
+      lastTechnicalDrop.current = null;
+      setAiForfeits([]);
       setPrivateRoom(null);
       setPrivateRoomUpdates([]);
       setPrivateInvitations([]);
@@ -191,6 +196,10 @@ export function useGameSocket(enabled: boolean, onAuthenticationRequired?: (reas
             setNotice(`${message.joined} of ${message.required} players joined the ${message.playerCount}-player queue.`);
           } else if (message.type === "game.started") {
             const { type: _type, hand: nextHand, ...state } = message;
+            if (activeGameId.current !== state.gameId) {
+              lastTechnicalDrop.current = null;
+              setAiForfeits([]);
+            }
             setGame(state);
             activeGameId.current = state.gameId;
             currentGameName.current = state.gameName;
@@ -209,10 +218,18 @@ export function useGameSocket(enabled: boolean, onAuthenticationRequired?: (reas
             setHand(message.hand);
           } else if (message.type === "game.ended") {
             setCompletedGameName(currentGameName.current);
-            setWinner({ id: message.winnerId, name: message.winnerName, reason: message.reason, score: message.score });
-            setNotice(`${message.winnerName} won the game${message.score === undefined ? "." : ` with ${message.score} points.`}`);
+            const technicalForfeit = message.reason === "player-dropped" ? lastTechnicalDrop.current : null;
+            setWinner({ id: message.winnerId, name: message.winnerName, reason: message.reason, score: message.score,
+              ...(technicalForfeit ? { technicalForfeit } : {}) });
+            setNotice(technicalForfeit ? `${message.winnerName} won after ${technicalForfeit.playerName} forfeited. ${technicalForfeit.reason}`
+              : `${message.winnerName} won the game${message.score === undefined ? "." : ` with ${message.score} points.`}`);
           } else if (message.type === "game.player-dropped") {
-            setNotice(message.playerId === authenticatedPlayerId.current
+            const technical = message.reasonCode && message.reason ? {
+              playerId: message.playerId, playerName: message.playerName, reasonCode: message.reasonCode, reason: message.reason
+            } : null;
+            lastTechnicalDrop.current = technical;
+            if (technical) setAiForfeits((current) => [...current.filter((entry) => entry.playerId !== technical.playerId), technical]);
+            setNotice(technical ? `${message.playerName} forfeited. ${technical.reason}` : message.playerId === authenticatedPlayerId.current
               ? "You dropped from the game. Returning to the lobby…"
               : `${message.playerName} dropped from the game.`);
           } else if (message.type === "game.left") {
@@ -434,6 +451,8 @@ export function useGameSocket(enabled: boolean, onAuthenticationRequired?: (reas
 
   const returnToLobby = () => {
     activeGameId.current = null;
+    lastTechnicalDrop.current = null;
+    setAiForfeits([]);
     setGame(null);
     setHand([]);
     setWinner(null);
@@ -450,6 +469,7 @@ export function useGameSocket(enabled: boolean, onAuthenticationRequired?: (reas
     playerId,
     notice,
     winner,
+    aiForfeits,
     completedGameName,
     realtimeChatMessages,
     connectionGeneration,

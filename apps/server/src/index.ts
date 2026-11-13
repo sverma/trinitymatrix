@@ -261,7 +261,7 @@ const aiPlayers = aiStore && matchmaker instanceof Matchmaker ? new AiPlayers(
   matchmaker, aiStore,
   config.openRouterApiKey ? new OpenRouterAgentClient({ apiKey: config.openRouterApiKey }) : null,
   config.aiDailyBudgetUsd,
-  (code, agentId) => app.log.warn({ code, agentId }, "AI player operation unavailable")
+  (code, agentId, context) => app.log.warn({ code, agentId, ...context }, "AI player operation unavailable")
 ) : null;
 const hydrateState = (): Promise<void> => {
   if (stateHydrated) return Promise.resolve();

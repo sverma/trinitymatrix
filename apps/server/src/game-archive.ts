@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { aiForfeitNoticeSchema } from "@trinitymatrix/protocol";
 import type { ApplicationRepository } from "./db/repository";
 import type { ArchivedGameEvent, GameArchive } from "./matchmaker";
 
@@ -55,6 +56,7 @@ export class PostgresGameArchive implements GameArchive {
   }
 
   async recordEvent(event: ArchivedGameEvent): Promise<void> {
+    const aiFailure = event.aiFailure ? aiForfeitNoticeSchema.parse(event.aiFailure) : undefined;
     if (event.matchType === "private" && event.eventType === "game.started") {
       await this.startPrivateGame(event);
       return;
@@ -85,6 +87,7 @@ export class PostgresGameArchive implements GameArchive {
           commandId: event.commandId,
           payload: {
             ...(event.command ? { command: event.command } : {}),
+            ...(aiFailure ? { aiFailure } : {}),
             state: event.game
           },
           occurredAt: event.occurredAt
