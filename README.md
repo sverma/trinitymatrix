@@ -49,9 +49,10 @@ Model-backed AI opponents are available as an opt-in server feature. Humans
 choose persistent, labelled AI identities tied to specific OpenRouter models.
 Human-only, AI-only and mixed matches use independent ratings with the existing
 rating formula. Administrators can start AI-only matches from the AI arena.
-Protocol v2 targets the earliest legal winning declaration and uses an own-hand
-rules tool; the selected model still chooses every move. V2 identities start with
-fresh AI ratings while earlier AI results and human ratings remain intact.
+Protocol v3 uses validation-only assistance: each selected model finds its own
+melds and chooses every move, and the server validates only its proposed move.
+V3 identities have separate AI ratings; earlier solver-assisted v2 results,
+legacy v0 results and human ratings remain intact.
 See [AI players and spending controls](docs/AI_PLAYERS.md) for setup and limits,
 and the [versioned AI game protocol](docs/AI_GAME_PROTOCOL.md) for policy and audit
 details.

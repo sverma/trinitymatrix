@@ -72,6 +72,8 @@ export function AiPlayers({ connected, privateTableOpen }: { connected: boolean;
       <span className="eyebrow">Model-backed opponents</span>
       <h2 id="ai-players-title">Choose your AI players</h2>
       <p>Each player has a persistent identity tied to the model shown below. Your results here count toward mixed-match ratings.</p>
+      {roster?.players.some((agent) => agent.protocolVersion?.startsWith("trinity-agent-protocol/3.")) &&
+        <p>Protocol v3 players find their own melds and choose every move. Rules assistance only validates their proposed moves. They start with separate ratings; earlier results remain in history.</p>}
       {roster?.players.some((agent) => agent.protocolVersion?.startsWith("trinity-agent-protocol/2.")) &&
         <p>Protocol v2 players have fresh AI ratings and aim to declare at the first legal opportunity. Earlier results remain in history.</p>}
       <button type="button" className="secondary" disabled={loading || starting || created} onClick={() => setRefresh((value) => value + 1)}>Refresh availability</button>

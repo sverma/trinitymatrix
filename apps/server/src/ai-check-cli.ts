@@ -5,7 +5,6 @@ import { PostgresAiStore } from "./ai-repository";
 import { OpenRouterAgentClient } from "./ai-openrouter";
 import { qualifyAiModel } from "./ai-qualification";
 import { createSchemaDiagnosticFetch } from "./ai-schema-diagnostics";
-import { AiRuleToolService } from "./ai-rule-tool-service";
 
 // Operator-only diagnostic: real provider decisions in disposable in-memory
 // games. Charges use the production budget ledger; rankings/history are untouched.
@@ -17,7 +16,7 @@ async function main(): Promise<void> {
   let diagnoseSchema = false;
   const args = process.argv.slice(2);
   if (args.includes("--help")) {
-    console.log("Usage: node dist/ops/ai-check.js [--turns 1..10] [--winning-hand] [--diagnose-schema] [MODEL_ID ...]\nRuns model decisions in disposable fixtures; every request uses the shared daily budget ledger.\n--winning-hand starts with the sanitized immediately winning 14-card hand and defaults to 1 turn. The selected model must return a valid declaration.\n--diagnose-schema emits only allowlisted HTTP/schema error hints; never raw provider text.");
+    console.log("Usage: node dist/ops/ai-check.js [--turns 1..10] [--winning-hand] [--diagnose-schema] [MODEL_ID ...]\nRuns model decisions in disposable fixtures; every request uses the shared daily budget ledger.\n--winning-hand starts with the sanitized immediately winning 14-card hand and defaults to 1 turn. V3 accepts any legal model move and reports missed wins as performance; historical solver-assisted protocols require a declaration.\n--diagnose-schema emits only allowlisted HTTP/schema error hints; never raw provider text.");
     return;
   }
   for (let index = 0; index < args.length; index += 1) {
@@ -51,7 +50,6 @@ async function main(): Promise<void> {
   }
   const pool = createPostgresPool(config);
   const store = new PostgresAiStore(pool);
-  const rulesTools = new AiRuleToolService();
   let failures = 0;
   try {
     await store.provision();
@@ -65,7 +63,7 @@ async function main(): Promise<void> {
       if (selected.length && !selected.includes(identity.modelId)) continue;
       const report = await qualifyAiModel({
         identity, ledger: store, dailyBudgetUsd: config.aiDailyBudgetUsd, turns,
-        scenario: winningHand ? "winning-hand" : "full-turn", serverRevision: config.appRevision, rulesTools,
+        scenario: winningHand ? "winning-hand" : "full-turn", serverRevision: config.appRevision,
         createClient: (timeoutMs) => new OpenRouterAgentClient({ apiKey: config.openRouterApiKey!, timeoutMs,
           ...(diagnoseSchema ? { fetch: createSchemaDiagnosticFetch(fetch, (diagnostic) => console.log(JSON.stringify(diagnostic))) } : {}) })
       });
@@ -73,7 +71,7 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(report));
       if (report.status === "budget-unavailable") break;
     }
-  } finally { await rulesTools.stop(); await pool.end(); }
+  } finally { await pool.end(); }
   if (failures) process.exitCode = 1;
 }
 

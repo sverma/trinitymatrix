@@ -4,11 +4,12 @@ import type { Pool } from "pg";
 import { aiProtocolRevisionSchema, aiRequestCompletionSchema, aiRequestContextSchema,
   type AiProtocolRevision, type AiRequestCompletion, type AiRequestContext } from "./ai-protocol-provenance";
 import { AI_GAME_PROTOCOL_DESCRIPTOR, AI_GAME_PROTOCOL_IDENTITY_VERSION, AI_LEGACY_V1_PROTOCOL_DESCRIPTOR, AI_LEGACY_V1_PROTOCOL_VERSION } from "./ai-game-protocol";
+import { AI_VALIDATION_IDENTITY_VERSION, AI_VALIDATION_PROTOCOL_DESCRIPTOR } from "./ai-game-protocol-v3";
 export type { AiProtocolRevision, AiRequestCompletion, AiRequestContext } from "./ai-protocol-provenance";
 
 export const AI_LEGACY_IDENTITY_VERSION = AI_LEGACY_V1_PROTOCOL_VERSION;
-export const AI_PROMPT_VERSION = AI_GAME_PROTOCOL_IDENTITY_VERSION;
-export const AI_CURRENT_IDENTITY_VERSION = AI_GAME_PROTOCOL_IDENTITY_VERSION;
+export const AI_PROMPT_VERSION = AI_VALIDATION_IDENTITY_VERSION;
+export const AI_CURRENT_IDENTITY_VERSION = AI_VALIDATION_IDENTITY_VERSION;
 export const AI_REQUEST_RESERVATION_USD = 0.05;
 export const INITIAL_AI_ROSTER = [
   { modelId: "anthropic/claude-haiku-5.5", modelName: "Claude Haiku 5.5", displayName: "Haiku AI" },
@@ -71,6 +72,7 @@ export class PostgresAiStore implements AiStore {
   async provision(): Promise<void> {
     await this.registerProtocol(AI_LEGACY_V1_PROTOCOL_DESCRIPTOR);
     await this.registerProtocol(AI_GAME_PROTOCOL_DESCRIPTOR);
+    await this.registerProtocol(AI_VALIDATION_PROTOCOL_DESCRIPTOR);
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -112,10 +114,10 @@ export class PostgresAiStore implements AiStore {
       FROM ai_agents a JOIN player_profiles p ON p.user_id=a.user_id JOIN app_users u ON u.id=a.user_id
       LEFT JOIN player_rankings_by_composition r ON r.user_id=a.user_id AND r.composition='mixed'
       WHERE (a.prompt_version=$1 AND a.model_id=ANY($2::text[]))
-        OR (a.prompt_version=$3 AND EXISTS (SELECT 1 FROM match_participants mp JOIN ranking_matches m ON m.id=mp.match_id
+        OR (a.prompt_version=ANY($3::text[]) AND EXISTS (SELECT 1 FROM match_participants mp JOIN ranking_matches m ON m.id=mp.match_id
           WHERE mp.user_id=a.user_id AND m.status='active'))
       ORDER BY p.display_name,a.user_id`,
-    [AI_CURRENT_IDENTITY_VERSION, INITIAL_AI_ROSTER.map(({ modelId }) => modelId), AI_LEGACY_IDENTITY_VERSION]);
+    [AI_CURRENT_IDENTITY_VERSION, INITIAL_AI_ROSTER.map(({ modelId }) => modelId), [AI_LEGACY_IDENTITY_VERSION, AI_GAME_PROTOCOL_IDENTITY_VERSION]]);
     return result.rows.map((r) => ({ id: r.user_id, displayName: r.display_name, modelId: r.model_id,
       modelName: r.model_name, memory: r.memory, enabled: r.enabled, rating: r.rating, gamesPlayed: r.games_played, wins: r.wins,
       protocolId: r.identity_version, identityVersion: r.identity_version, selectable: r.selectable }));
@@ -131,6 +133,8 @@ export class PostgresAiStore implements AiStore {
 
   async reserveRequest(userId: string, modelId: string, dailyBudgetUsd: number, context?: AiRequestContext): Promise<string | null> {
     const audit = aiRequestContextSchema.parse(context ?? {});
+    // Validation-only requests must not publish solver-derived hand readiness.
+    const declarationAvailable = audit.protocolId === AI_VALIDATION_IDENTITY_VERSION ? null : audit.declarationAvailable ?? null;
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -145,7 +149,7 @@ export class PostgresAiStore implements AiStore {
          AND (SELECT COALESCE(SUM(COALESCE(actual_usd,reserved_usd)),0) FROM ai_model_requests
               WHERE budget_day=(statement_timestamp() AT TIME ZONE 'UTC')::date)+$4 <= $5
          RETURNING id`, [randomUUID(), userId, modelId, AI_REQUEST_RESERVATION_USD, dailyBudgetUsd,
-          audit.protocolId ?? null, audit.matchId ?? null, audit.gameRevision ?? null, audit.toolsVersion ?? null, audit.declarationAvailable ?? null, audit.serverRevision ?? null]
+          audit.protocolId ?? null, audit.matchId ?? null, audit.gameRevision ?? null, audit.toolsVersion ?? null, declarationAvailable, audit.serverRevision ?? null]
       );
       await client.query("COMMIT");
       return result.rows[0]?.id ?? null;
