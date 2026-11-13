@@ -9,6 +9,7 @@ import { build } from "tsup";
 import { createDeck } from "@trinitymatrix/game-domain";
 import { describe, expect, it } from "vitest";
 import { AiRuleToolService, aiRuleWorkerUrl } from "./ai-rule-tool-service";
+import { INITIAL_AI_ROSTER } from "./ai-repository";
 import type { AiRulesInput } from "./ai-rule-tools";
 
 const input: AiRulesInput = { hand: createDeck().slice(0, 13), wildRank: 7 };
@@ -53,7 +54,7 @@ describe("bounded AI rules worker service", () => {
   it("checks a simultaneous turn from every configured model within the normal deadline", async () => {
     const service = new AiRuleToolService({ workerFactory: sourceWorker });
     try {
-      const facts = await Promise.all(Array.from({ length: 14 }, () => service.compute(input)));
+      const facts = await Promise.all(Array.from({ length: INITIAL_AI_ROSTER.length }, () => service.compute(input)));
       expect(facts.every(({ status }) => status === "complete")).toBe(true);
     } finally { await service.stop(); }
   });

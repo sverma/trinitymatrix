@@ -194,7 +194,7 @@ function validatedRulesFacts(value: AiGameRulesFacts | undefined, observation: A
 /** Keep reasoning inside the shared output/turn budget without changing models. */
 function modelReasoningOptions(modelId: string) {
   if (["openai/gpt-6.1-terra", "openai/gpt-5.4-mini", "nvidia/nemotron-3-ultra-550b-a55b",
-    "xiaomi/mimo-v2.6-flash", "upstage/solar-pro4", "z-ai/glm-5"].includes(modelId)) return { enabled: false, exclude: true };
+    "xiaomi/mimo-v2.6-flash", "z-ai/glm-5"].includes(modelId)) return { enabled: false, exclude: true };
   if (modelId === "openai/gpt-6-luna" || modelId === "deepseek/deepseek-v4.1-flash") return { enabled: false, exclude: true };
   if (modelId === "anthropic/claude-haiku-5.5" || modelId === "deepseek/deepseek-v3.2") return { enabled: false, exclude: true };
   if (modelId === "google/gemini-3.8-flash") return { effort: "low", exclude: true };

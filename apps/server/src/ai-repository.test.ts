@@ -28,7 +28,6 @@ describe("persistent AI roster identities", () => {
     { modelId: "openai/gpt-5.4-mini", modelName: "GPT-5.4 Mini", displayName: "GPT Mini AI" },
     { modelId: "nvidia/nemotron-3-ultra-550b-a55b", modelName: "Nemotron 3 Ultra", displayName: "Nemotron AI" },
     { modelId: "xiaomi/mimo-v2.6-flash", modelName: "MiMo V2.6 Flash", displayName: "MiMo AI" },
-    { modelId: "upstage/solar-pro4", modelName: "Solar Pro 4", displayName: "Solar AI" },
     { modelId: "z-ai/glm-5", modelName: "GLM 5", displayName: "GLM AI" },
     { modelId: "openai/gpt-6-luna", modelName: "GPT-6 Luna", displayName: "Luna AI" },
     { modelId: "meta-llama/llama-4-maverick", modelName: "Llama 4 Maverick", displayName: "Llama AI" },

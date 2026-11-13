@@ -124,7 +124,6 @@ describe("legacy model-bound OpenRouter player", () => {
     { id: "openai/gpt-5.4-mini", reasoning: { enabled: false, exclude: true } },
     { id: "nvidia/nemotron-3-ultra-550b-a55b", reasoning: { enabled: false, exclude: true } },
     { id: "xiaomi/mimo-v2.6-flash", reasoning: { enabled: false, exclude: true } },
-    { id: "upstage/solar-pro4", reasoning: { enabled: false, exclude: true } },
     { id: "z-ai/glm-5", reasoning: { enabled: false, exclude: true } },
     { id: "openai/gpt-6-luna-preview", reasoning: undefined },
     { id: "deepseek/deepseek-v4.1-flash", reasoning: { enabled: false, exclude: true } },
