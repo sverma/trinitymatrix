@@ -290,6 +290,45 @@ describe("durable data HTTP routes", () => {
     await app.close();
   });
 
+  it("shows the archived AI technical forfeit cause in the replay summary", async () => {
+    const message = "The selected model was unavailable for several turns.";
+    const listGameEvents = vi.fn(async () => ({ items: [{
+      eventId,
+      matchId,
+      sequence: 1,
+      eventType: "game.drop",
+      actorUserId: opponentId,
+      commandId: null,
+      payload: { aiFailure: { code: "AI_UNAVAILABLE", message } },
+      occurredAt: endedAt
+    }], nextCursor: null }));
+    const app = await buildApp(repository({ listGameEvents }));
+    const response = await app.inject({ method: "GET", url: `/api/games/${gameName}/replay`, headers: { "x-test-user": "player" } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().events[0].summary).toBe(`Bela forfeited. ${message}`);
+    await app.close();
+  });
+
+  it("preserves ordinary drop summaries and ignores malformed or unrelated AI failure payloads", async () => {
+    const payloads = [
+      {},
+      { aiFailure: "not a structured notice" },
+      { aiFailure: { code: "UNTRUSTED_CODE", message: "Untrusted cause" } },
+      { aiFailure: { code: "AI_UNAVAILABLE", message: "x".repeat(301) } },
+      { aiFailure: { code: "AI_UNAVAILABLE", message: "Untrusted cause", extra: "not allowed" } }
+    ];
+    const items = payloads.map((payload, index) => ({ eventId, matchId, sequence: index + 1, eventType: "game.drop", actorUserId: opponentId, commandId: null, payload, occurredAt: endedAt }));
+    items.push({ eventId, matchId, sequence: items.length + 1, eventType: "game.draw", actorUserId: opponentId, commandId: null,
+      payload: { aiFailure: { code: "AI_UNAVAILABLE", message: "An unrelated cause" } }, occurredAt: endedAt });
+    const app = await buildApp(repository({ listGameEvents: vi.fn(async () => ({ items, nextCursor: null })) }));
+    const response = await app.inject({ method: "GET", url: `/api/games/${gameName}/replay`, headers: { "x-test-user": "player" } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().events.map((event: { summary: string }) => event.summary)).toEqual([
+      ...payloads.map(() => "Bela: game drop"), "Bela: game draw"
+    ]);
+    await app.close();
+  });
+
   it("reconstructs legacy melds, preserves recorded declaration groups, and identifies the winner", async () => {
     const abhiMatch: MatchRecord = {
       ...match,
