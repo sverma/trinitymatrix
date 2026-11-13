@@ -249,6 +249,46 @@ describe("model-bound OpenRouter player", () => {
       .rejects.toMatchObject({ code: "invalid-decision" });
   });
 
+  it("omits Gemini-incompatible array bounds while retaining exact action and owned-card enums", async () => {
+    const geminiId = "google/gemini-3.8-flash";
+    const view = drawnObservation();
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      const schema = body.response_format.json_schema.schema;
+      const nodes: unknown[] = [schema];
+      while (nodes.length) {
+        const node = nodes.pop();
+        if (!node || typeof node !== "object") continue;
+        expect(node).not.toHaveProperty("minItems");
+        expect(node).not.toHaveProperty("maxItems");
+        nodes.push(...Object.values(node));
+      }
+      expect(schema.properties.action.enum).toEqual(["discard", "declare"]);
+      expect(schema.properties.cardId.enum).toEqual(view.hand.map(({ id }) => id));
+      expect(schema.properties.groups.items.items.enum).toEqual(view.hand.map(({ id }) => id));
+      return jsonResponse(providerBody(decision({ action: "discard", cardId: "own-13" }), { model: geminiId }));
+    });
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    await expect(client.decide({ modelId: geminiId, observation: view, memory: "" }))
+      .resolves.toMatchObject({ decision: { action: "discard", cardId: "own-13" } });
+    fetcher.mockImplementation(async () => jsonResponse(providerBody(decision({
+      action: "discard", cardId: "own-13", groups: Array.from({ length: 15 }, () => ["own-0"])
+    }), { model: geminiId })));
+    await expect(client.decide({ modelId: geminiId, observation: view, memory: "" }))
+      .rejects.toMatchObject({ code: "invalid-decision" });
+  });
+
+  it.each(["anthropic/claude-haiku-5.5", "deepseek/deepseek-v3.2", "qwen/qwen3.8-flash", "mistralai/mistral-small-2603"])(
+    "preserves array bounds and declaration-group minimum for %s", async (id) => {
+      const view = drawnObservation();
+      const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision({ action: "discard", cardId: "own-13" }), { model: id })));
+      const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+      await client.decide({ modelId: id, observation: view, memory: "" });
+      const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+      expect(body.response_format.json_schema.schema.properties.groups).toMatchObject({ maxItems: 14, items: { minItems: 3, maxItems: 14 } });
+    }
+  );
+
   it("offers discard-pile drawing only when a visible card exists", async () => {
     const view = observation();
     view.state.topDiscard = { ...hand[0]!, id: "visible-discard" };

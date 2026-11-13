@@ -105,10 +105,13 @@ function allowedActions(observation: AiAgentObservation): AiAgentDecision["actio
   return observation.hand.length === 14 ? ["discard", "declare"] : [];
 }
 
-function decisionJsonSchema(observation: AiAgentObservation) {
+function decisionJsonSchema(observation: AiAgentObservation, modelId: string) {
   const actions = allowedActions(observation);
   const cardRequired = actions.includes("discard");
   const cardIds = observation.hand.map(({ id }) => id);
+  // This Gemini endpoint rejects otherwise valid minItems/maxItems constraints.
+  // Retain all array bounds in local validation and exact action/card enums here.
+  const portableArrays = modelId === "google/gemini-3.8-flash";
   return {
     type: "object",
     properties: {
@@ -118,7 +121,8 @@ function decisionJsonSchema(observation: AiAgentObservation) {
         // Nullable strings are portable through Gemini's JSON-schema mapping;
         // the local validator still requires an actual null in these stages.
         : { type: ["string", "null"], description: "Return null. No card is discarded by this action." },
-      groups: { type: "array", maxItems: 14, items: { type: "array", minItems: cardRequired ? 3 : 1, maxItems: 14,
+      groups: { type: "array", ...(!portableArrays ? { maxItems: 14 } : {}), items: {
+        type: "array", ...(!portableArrays ? { minItems: cardRequired ? 3 : 1, maxItems: 14 } : {}),
         items: { type: "string", enum: cardIds } } },
       memory: { type: "string", description: "Concise persistent factual memory or strategy summary: one short sentence, at most 512 characters." }
     },
@@ -254,7 +258,7 @@ export class OpenRouterAgentClient {
         { role: "system", content: systemPrompt },
         { role: "user", content: JSON.stringify({ observation, memory: input.memory }) }
       ],
-      response_format: { type: "json_schema", json_schema: { name: "trinity_move", strict: true, schema: decisionJsonSchema(observation) } },
+      response_format: { type: "json_schema", json_schema: { name: "trinity_move", strict: true, schema: decisionJsonSchema(observation, input.modelId) } },
       max_tokens: AI_MAX_OUTPUT_TOKENS,
       ...(reasoning ? { reasoning } : {}),
       stream: false,
