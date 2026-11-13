@@ -41,7 +41,7 @@
 .watch-board, .watch-player-hand { min-width: 0; }
 .watch-table-state { display: flex; flex-wrap: wrap; min-height: 8rem; align-items: center; justify-content: center; gap: clamp(1rem, 4vw, 3rem); padding: 1rem; border: 1px solid var(--line); border-radius: 1rem; background: radial-gradient(ellipse, #145b76, #082733); }
 .watch-table-state > span { display: grid; justify-items: center; gap: .4rem; color: #d7e7ee; font-size: .85rem; }
-.watch-table-state img { width: 3.2rem; height: auto; border-radius: .3rem; }
+.watch-table-state img { width: 3.2rem; height: auto; border-radius: .3rem; background: #fff; }
 .watch-hands { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; margin-top: 1rem; }
 .watch-player-hand { padding: .8rem; border: 1px solid var(--line); border-radius: .8rem; background: var(--panel); }
 .watch-player-hand.current-turn { border-color: var(--gold); }
@@ -51,7 +51,7 @@
 .watch-player-hand code { display: block; margin-top: .3rem; color: var(--muted); font-size: .65rem; overflow-wrap: anywhere; }
 .watch-cards { display: flex; gap: .25rem; min-width: 0; margin: .75rem 0 .1rem; padding: .2rem 0 .5rem; overflow-x: auto; overscroll-behavior-inline: contain; list-style: none; }
 .watch-cards li { position: relative; width: 3.5rem; flex: 0 0 3.5rem; }
-.watch-cards img { display: block; width: 100%; height: auto; aspect-ratio: .687; border-radius: .25rem; }
+.watch-cards img { display: block; width: 100%; height: auto; aspect-ratio: .687; border-radius: .25rem; background: #fff; }
 .watch-cards small { position: absolute; bottom: .2rem; right: .15rem; padding: .1rem .2rem; color: #071b25; border-radius: .2rem; background: #ffe29c; font-size: .6rem; }
 .watch-move-feed { min-width: 0; max-height: 42rem; padding: 1rem; overflow-y: auto; border: 1px solid var(--line); border-radius: 1rem; background: var(--panel); }
 .watch-move-feed h2 { margin: 0 0 .8rem; font-size: 1.1rem; }

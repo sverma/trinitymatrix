@@ -8,6 +8,20 @@ const runId = Date.now();
 let sequence = 0;
 type Player = { context: BrowserContext; page: Page; name: string; playerId: string };
 type Detail = { broadcast: LiveBroadcastSummary; frame: BroadcastFrame | null; comments: Array<{ id: string; message: string; deleted: boolean }>; serverNow: number };
+type PlaybackDiagnostic = { page: string; kind: string; message: string };
+
+async function collectPlaybackDiagnostics(page: Page, label: string, diagnostics: PlaybackDiagnostic[]) {
+  const add = (kind: string, message: string) => { if (diagnostics.length < 200) diagnostics.push({ page: label, kind, message: message.slice(0, 2_000) }); };
+  page.on("console", (message) => { if (["error", "warning"].includes(message.type())) add(message.type(), message.text()); });
+  page.on("pageerror", (error) => add("pageerror", error.message));
+  await page.addInitScript(() => {
+    document.addEventListener("error", (event) => {
+      if (!(event.target instanceof HTMLVideoElement)) return;
+      const video = event.target;
+      console.warn("Native broadcast video state", JSON.stringify({ code: video.error?.code, message: video.error?.message, networkState: video.networkState, readyState: video.readyState, currentTime: video.currentTime, duration: video.duration, paused: video.paused, nativeHls: video.canPlayType("application/vnd.apple.mpegurl") }));
+    }, true);
+  });
+}
 
 async function player(browser: Browser, label: string): Promise<Player> {
   const context = await browser.newContext({ viewport: { width: 1366, height: 768 } });
@@ -63,6 +77,7 @@ async function noOverflow(page: Page) {
 
 async function screenshot(page: Page, info: TestInfo, name: string) {
   await noOverflow(page);
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
   const output = process.env.TRINITY_E2E_SCREENSHOT_DIR;
   const path = output ? join(output, `${name}.png`) : info.outputPath(`${name}.png`);
   await page.screenshot({ path, fullPage: true, animations: "disabled" });
@@ -99,6 +114,7 @@ test("live broadcasts enforce a real two-minute release for hands and video, pre
   test.setTimeout(300_000);
   const accounts: Player[] = [];
   const extraPages: Page[] = [];
+  const diagnostics: PlaybackDiagnostic[] = [];
   // All identities and games are created through real authentication and matchmaking below.
   const first = await Promise.all([player(browser, "Broadcast Host"), player(browser, "Broadcast Rival"), player(browser, "Spectator")]);
   accounts.push(...first);
@@ -136,6 +152,7 @@ test("live broadcasts enforce a real two-minute release for hands and video, pre
     const table = await joinBroadcast([host, rival], 2);
     const sameAccountWatch = await host.context.newPage(); extraPages.push(sameAccountWatch);
     const spectatorWatch = spectator.page;
+    await Promise.all([collectPlaybackDiagnostics(sameAccountWatch, "participant-watch", diagnostics), collectPlaybackDiagnostics(spectatorWatch, "spectator-watch", diagnostics)]);
     let watchSocketCount = 0;
     sameAccountWatch.on("websocket", (socket) => { if (new URL(socket.url()).pathname === "/ws") watchSocketCount += 1; });
     spectatorWatch.on("websocket", (socket) => { if (new URL(socket.url()).pathname === "/ws") watchSocketCount += 1; });
@@ -240,7 +257,9 @@ test("live broadcasts enforce a real two-minute release for hands and video, pre
     expect(firstSegment).toBeTruthy();
     expect((await spectatorWatch.request.get(new URL(firstSegment!, new URL(playlistPath, spectatorWatch.url())).href)).status()).toBe(200);
     await expect(spectatorWatch.getByLabel("Delayed broadcast video")).toBeVisible({ timeout: 15_000 });
-    await expect.poll(() => spectatorWatch.getByLabel("Delayed broadcast video").evaluate((element: HTMLVideoElement) => element.readyState), { timeout: 20_000 }).toBeGreaterThanOrEqual(2);
+    await spectatorWatch.bringToFront();
+    await expect.poll(() => spectatorWatch.getByLabel("Delayed broadcast video").evaluate((element: HTMLVideoElement) => element.error === null && element.currentTime > 1), { timeout: 20_000, message: "Delayed video must decode and advance, rather than merely load metadata" }).toBe(true);
+    await expect(spectatorWatch.locator(".live-video [role=alert]")).toHaveCount(0);
 
     await spectatorWatch.getByRole("button", { name: "Pause table", exact: true }).click();
     await spectatorWatch.getByRole("button", { name: "Previous move", exact: true }).click();
@@ -268,6 +287,7 @@ test("live broadcasts enforce a real two-minute release for hands and video, pre
     expect(directory.broadcasts.some(({ gameName }) => gameName === table.gameName)).toBe(true);
     expect(watchSocketCount).toBe(0);
   } finally {
+    await testInfo.attach("broadcast-playback-diagnostics", { body: Buffer.from(JSON.stringify(diagnostics, null, 2)), contentType: "application/json" });
     await Promise.allSettled(extraPages.map((page) => page.close()));
     await Promise.allSettled(accounts.map(({ context }) => context.close()));
   }

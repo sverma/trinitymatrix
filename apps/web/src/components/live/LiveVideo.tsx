@@ -62,7 +62,7 @@ export function LiveVideo({ gameName }: { gameName: string }) {
     {(error || playbackError) && <p className="live-error" role="alert">{error || playbackError} <button className="secondary" onClick={() => { refresh(); setRetry((value) => value + 1); }}>Retry video</button></p>}
     {info?.video && <>
       <p className="live-video-state">{info.video.publisherName ? `${info.video.publisherName} · ` : ""}{info.video.status === "interrupted" ? "Publisher disconnected" : info.video.status === "stopped" || info.video.status === "expired" ? "Video has ended" : playlist ? "Delayed live video" : remaining > 0 ? `Video warming up · available in ${remaining}s` : "Waiting for the first delayed video segment…"}</p>
-      {playlist && <video ref={videoRef} controls muted autoPlay playsInline aria-label="Delayed broadcast video" onError={() => setPlaybackError("Video playback was interrupted. Retry to reconnect.")} />}
+      {playlist && <video ref={videoRef} controls muted autoPlay playsInline aria-label="Delayed broadcast video" onPlaying={() => setPlaybackError("")} onError={() => setPlaybackError("Video playback was interrupted. Retry to reconnect.")} />}
       <p className="live-caption">Video has its own playback controls. The table and video both use the server-enforced broadcast delay.</p>
     </>}
   </section>;

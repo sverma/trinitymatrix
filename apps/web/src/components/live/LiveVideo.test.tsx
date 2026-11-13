@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api";
 import { liveName, videoInfo } from "./live.test-helpers";
@@ -23,6 +23,10 @@ describe("delayed broadcast video viewer", () => {
     const { unmount } = render(<LiveVideo gameName={liveName} />);
     const video = await screen.findByLabelText("Delayed broadcast video");
     await waitFor(() => expect(video).toHaveAttribute("src", source));
+    fireEvent.error(video);
+    expect(screen.getByRole("alert")).toHaveTextContent("playback was interrupted");
+    fireEvent.playing(video);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(play).toHaveBeenCalled(); unmount();
     expect(pause).toHaveBeenCalled(); expect(video).not.toHaveAttribute("src");
   });

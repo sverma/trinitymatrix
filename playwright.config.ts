@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { fileURLToPath } from "node:url";
 
 const externalBaseUrl = process.env.PLAYWRIGHT_BASE_URL;
 const localRunId = process.env.TRINITY_E2E_RUN_ID ?? String(Date.now());
@@ -32,8 +33,11 @@ export default defineConfig({
     { name: "mobile-chromium", use: { ...devices["Pixel 7"] }, grep: /responsive (lobby|game)/ }
   ],
   webServer: externalBaseUrl ? undefined : {
-    command: "npm run dev",
+    command: "npm run build && node apps/server/dist/index.js",
     env: {
+      PORT: "8180",
+      HOST: "127.0.0.1",
+      WEB_DIST_PATH: fileURLToPath(new URL("./apps/web/dist", import.meta.url)),
       STATE_NAMESPACE: `trinitymatrix:e2e:${localRunId}`,
       DATABASE_URL: process.env.TRINITY_E2E_DATABASE_URL
         ?? "postgresql://trinitymatrix:trinitymatrix@127.0.0.1:5433/trinitymatrix",
