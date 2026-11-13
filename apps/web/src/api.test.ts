@@ -1,9 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api } from "./api";
+import { api, sameOriginMediaPath } from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("API response handling", () => {
+  it("keeps media requests on the application origin and within binary upload limits", async () => {
+    const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+    expect(() => sameOriginMediaPath("https://foreign.example/api/live/table/video")).toThrow("invalid media address");
+    expect(() => sameOriginMediaPath("/api/live/../../auth/logout")).toThrow("invalid media address");
+    await expect(api.uploadBroadcastVideo("/api/live/table/video/chunks", 0, new Blob([new Uint8Array(512 * 1024 + 1)]))).rejects.toThrow("upload limits");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends explicit AI broadcast consent and omits the field when no consent is given", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ gameId: "fixture" }), { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.startAiMatch(["agent1"]);
+    await api.startAiMatch(["agent1"], true);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body))).toEqual({ agentIds: ["agent1"] });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]![1]?.body))).toEqual({ agentIds: ["agent1"], broadcast: true });
+  });
   it("bypasses the browser cache for mutable JSON resources", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ rankings: [] }), {
       status: 200,

@@ -40,6 +40,11 @@ generate_value CHAT_ENCRYPTION_KEY "$(openssl rand -base64 32)"
 generate_value OTP_HASH_SECRET "$(openssl rand -hex 32)"
 generate_value ADMIN_ACCESS_SECRET "$(openssl rand -hex 32)"
 generate_value AUTH_STATE_EPOCH "singlehost_$(date -u +%Y%m%d)_$(openssl rand -hex 3)"
+# Add a distinct media credential when upgrading an existing installation.
+if ! grep -q '^BROADCAST_MEDIA_SECRET=' "$env_file"; then
+    printf '\nBROADCAST_MEDIA_SECRET=GENERATE_WITH_BOOTSTRAP\n' >> "$env_file"
+fi
+generate_value BROADCAST_MEDIA_SECRET "$(openssl rand -hex 32)"
 mkdir -p "$tls_dir"
 chmod 755 "$tls_dir"
 if [ ! -f "$tls_dir/server.crt" ]; then

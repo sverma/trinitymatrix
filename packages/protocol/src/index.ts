@@ -133,7 +133,7 @@ const handLayoutSchema = z.array(z.array(z.string().min(1)).min(1).max(14)).min(
   });
 
 export const clientMessageSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("queue.join"), playerCount: playerCountSchema }).strict(),
+  z.object({ type: z.literal("queue.join"), playerCount: playerCountSchema, broadcast: z.boolean().optional() }).strict(),
   z.object({ type: z.literal("queue.leave") }).strict(),
   z.object({
     type: z.literal("game.draw"),
@@ -202,6 +202,7 @@ export type GamePublicState = {
   showdown: ShowdownPublicState | null;
   revision: number;
   toss: TossResult | null;
+  broadcast?: { gameName: string; delayMs: number } | undefined;
 };
 
 export const gamePublicStateSchema = z.object({
@@ -218,7 +219,8 @@ export const gamePublicStateSchema = z.object({
   phase: z.enum(["playing", "showdown", "finished"]),
   showdown: showdownPublicStateSchema.nullable(),
   revision: z.number().int().nonnegative(),
-  toss: tossResultSchema.nullable()
+  toss: tossResultSchema.nullable(),
+  broadcast: z.object({ gameName: publicGameNameSchema, delayMs: z.literal(120_000) }).strict().optional()
 }).strict();
 
 const postGameChatBodySchema = z.string().trim().min(1).refine((value) => [...value].length <= 280, {
@@ -241,7 +243,7 @@ export type AiForfeitNotice = z.infer<typeof aiForfeitNoticeSchema>;
 
 export type ServerMessage =
   | { type: "session.ready"; playerId: string; displayName: string }
-  | { type: "queue.status"; playerCount: PlayerCount; joined: number; required: number }
+  | { type: "queue.status"; playerCount: PlayerCount; joined: number; required: number; broadcast?: boolean | undefined }
   | ({ type: "game.started"; hand: Card[] } & GamePublicState)
   | ({ type: "game.state" } & GamePublicState)
   | { type: "game.hand"; hand: Card[]; drawnCardId?: string | undefined }
@@ -258,7 +260,7 @@ export type ServerMessage =
 
 export const serverMessageSchema: z.ZodType<ServerMessage> = z.discriminatedUnion("type", [
   z.object({ type: z.literal("session.ready"), playerId: z.string(), displayName: z.string() }).strict(),
-  z.object({ type: z.literal("queue.status"), playerCount: playerCountSchema, joined: z.number().int(), required: z.number().int() }).strict(),
+  z.object({ type: z.literal("queue.status"), playerCount: playerCountSchema, joined: z.number().int(), required: z.number().int(), broadcast: z.boolean().optional() }).strict(),
   gamePublicStateSchema.extend({ type: z.literal("game.started"), hand: z.array(cardSchema) }).strict(),
   gamePublicStateSchema.extend({ type: z.literal("game.state") }).strict(),
   z.object({ type: z.literal("game.hand"), hand: z.array(cardSchema), drawnCardId: z.string().optional() }).strict(),
@@ -302,3 +304,59 @@ export function parseServerMessage(input: unknown): ServerMessage {
 export function isJoker(card: Card, wildRank: number): boolean {
   return card.printedJoker || card.rank === wildRank;
 }
+
+export const BROADCAST_DELAY_MS = 120_000;
+export const broadcastPlayerSchema = z.object({
+  id: z.string().uuid(), displayName: z.string().min(1).max(24), badgeId: profileBadgeSchema,
+  actorKind: z.enum(["human", "ai"]), aiModelId: z.string().min(1).max(200).optional()
+}).strict();
+export const liveBroadcastSummarySchema = z.object({
+  gameName: publicGameNameSchema, gameId: z.string().uuid(), title: z.string().min(1).max(160),
+  playerCount: playerCountSchema, composition: z.enum(["human", "ai", "mixed"]),
+  players: z.array(broadcastPlayerSchema).min(2).max(6), status: z.enum(["buffering", "live", "ended"]),
+  delayMs: z.literal(120_000), availableAt: z.number().int().nonnegative(), viewerCount: z.number().int().nonnegative()
+}).strict();
+export type LiveBroadcastSummary = z.infer<typeof liveBroadcastSummarySchema>;
+export const broadcastFrameEventSchema = z.object({
+  type: z.string().min(1).max(100), actorPlayerId: z.string().uuid().optional(), summary: z.string().max(200)
+}).strict();
+export const broadcastFrameSchema = z.object({
+  sequence: z.number().int().positive(), capturedAt: z.number().int().nonnegative(), releasedAt: z.number().int().nonnegative(),
+  game: gamePublicStateSchema,
+  hands: z.array(z.object({ playerId: z.string().uuid(), cards: z.array(cardSchema).max(14) }).strict()).min(2).max(6),
+  event: broadcastFrameEventSchema,
+  winner: z.object({ id: z.string().uuid(), name: z.string().max(24),
+    reason: z.enum(["declaration", "invalid-declaration", "player-dropped"]), score: z.number().int().nonnegative().optional()
+  }).strict().optional()
+}).strict();
+export type BroadcastFrame = z.infer<typeof broadcastFrameSchema>;
+export const broadcastCommentSchema = z.object({
+  id: z.string().uuid(), playerId: z.string().uuid(), displayName: z.string().min(1).max(24),
+  message: z.string().refine((value) => [...value].length <= 280), createdAt: z.number().int().nonnegative(), releasedAt: z.number().int().nonnegative(), deleted: z.boolean()
+}).strict();
+export type BroadcastComment = z.infer<typeof broadcastCommentSchema>;
+export const broadcastCommentBodySchema = z.object({ message: postGameChatBodySchema, clientMessageId: z.string().uuid() }).strict();
+export const liveBroadcastDirectorySchema = z.object({
+  broadcasts: z.array(liveBroadcastSummarySchema).max(50), nextCursor: z.string().nullable(), serverNow: z.number()
+}).strict();
+export const liveBroadcastDetailSchema = z.object({
+  broadcast: liveBroadcastSummarySchema, frame: broadcastFrameSchema.nullable(), comments: z.array(broadcastCommentSchema).max(100),
+  serverNow: z.number(), canModerate: z.boolean()
+}).strict();
+export const broadcastTimelineSchema = z.object({
+  frames: z.array(broadcastFrameSchema.pick({ sequence: true, capturedAt: true, event: true })).max(100), nextCursor: z.string().nullable()
+}).strict();
+export const broadcastFrameResponseSchema = z.object({ frame: broadcastFrameSchema }).strict();
+export const broadcastCloseCodeSchema = z.enum(["closed", "restart", "unavailable", "auth-required"]);
+export type BroadcastCloseCode = z.infer<typeof broadcastCloseCodeSchema>;
+export type BroadcastEvent =
+  | { type: "frame"; frame: BroadcastFrame }
+  | { type: "comment"; comment: BroadcastComment }
+  | { type: "viewers"; viewerCount: number }
+  | { type: "closed"; reason: string; code?: BroadcastCloseCode | undefined };
+export const broadcastEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("frame"), frame: broadcastFrameSchema }).strict(),
+  z.object({ type: z.literal("comment"), comment: broadcastCommentSchema }).strict(),
+  z.object({ type: z.literal("viewers"), viewerCount: z.number().int().nonnegative() }).strict(),
+  z.object({ type: z.literal("closed"), reason: z.string().min(1).max(300), code: broadcastCloseCodeSchema.optional() }).strict()
+]);

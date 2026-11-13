@@ -83,6 +83,7 @@ const policyPages: readonly PolicyPageDefinition[] = [
         <h2>5. Games, records and decisions</h2>
         <p>Game outcomes are determined by the server under the published game rules. Network interruptions, timeouts, drops and reconnections are handled by those rules. The authoritative game event record is used to investigate disputes. Rankings are an entertainment feature and may be corrected where a bug, abuse or data error affected a result.</p>
         <p>We do not place platform-controlled bots into human matchmaking. A player using unauthorized automation violates these Terms and may be removed after investigation.</p>
+        <p>Public match broadcasts require every human participant to opt in before matchmaking. Signed-in spectators can see all hands, moves and outcomes after a minimum two-minute server delay. Private invitation tables are excluded. Optional screen, camera and microphone sharing requires separate browser permission. A participant can stop sharing the whole broadcast without dropping the game; information already viewed or recorded by others cannot be recalled.</p>
       </section>
       <section>
         <h2>6. Suspension, termination and service changes</h2>
@@ -126,7 +127,8 @@ const policyPages: readonly PolicyPageDefinition[] = [
           <li><strong>Account and profile:</strong> email address, display name, profile badge, optional phone number and country/ISD code, account timestamps and status.</li>
           <li><strong>Authentication and security:</strong> one-time-code challenge records, session identifiers, IP address, user agent, request and security logs. We do not store the plain OTP after verification.</li>
           <li><strong>Gameplay:</strong> table name and ID, participants, invitations, cards and server-authoritative moves, timestamps, outcomes, drops, ratings, match history and replay events.</li>
-          <li><strong>Community:</strong> post-game messages, their author and timestamp, reports, moderation decisions, grievances and appeals. Chat content is encrypted at rest, but authorized administrators can decrypt it for moderation, safety, support and audit.</li>
+          <li><strong>Community:</strong> post-game and broadcast messages, their author and timestamp, reports, moderation decisions, grievances and appeals. Post-game chat content is encrypted at rest; broadcast chat is stored as readable text for signed-in viewers and authorized moderation.</li>
+          <li><strong>Optional broadcasts:</strong> delayed hands and public game events, audience presence, and any screen, camera or microphone recording you choose to publish. Broadcasts are available to signed-in spectators until sharing is stopped. Video replay is retained for up to six hours after recording ends, subject to storage limits and earlier withdrawal.</li>
           <li><strong>Technical:</strong> connection status, reconnect events, errors, performance measurements and device/browser information.</li>
         </ul>
         <p>If another player invites you to a private table, we receive the email address they entered even before you accept the invitation.</p>
@@ -140,6 +142,7 @@ const policyPages: readonly PolicyPageDefinition[] = [
         <h2>4. Sharing and processors</h2>
         <p>We do not sell personal data. We may disclose the minimum necessary data to hosting, database, cache, monitoring, security and email-delivery providers acting under contract; professional advisers and auditors; a successor in a corporate transaction; or authorities where law requires it or where necessary to protect rights and safety.</p>
         <p>Hosting, storage, monitoring and transactional-email providers are deployment-specific. The production version of this Policy must identify the providers actually enabled for that installation before publication.</p>
+        <p>For an opted-in broadcast, your display name, badge, delayed hand and moves are visible to signed-in spectators. Screen or camera sharing can reveal anything in the source you select. Choose that source carefully and avoid sharing personal information. Spectators must not relay hidden information to current players.</p>
         {!policyMetadata.publicationApproved && <p>Before launch, the operator must complete and publish the processor list, processing locations and international-transfer assessment.</p>}
       </section>
       <section>
@@ -202,6 +205,7 @@ const policyPages: readonly PolicyPageDefinition[] = [
       <section>
         <h2>4. Human-only matchmaking</h2>
         <p>TrinityMatrix does not insert platform-controlled bots into human matchmaking. All displayed seats are associated with authenticated player accounts. This does not guarantee that another person will never attempt unauthorized automation, so we monitor and investigate suspicious play.</p>
+        <p>Opted-in broadcasts reveal hands after at least two minutes. A card may still be held after that delay, so players must not watch their own match broadcast, use a second account to obtain hidden information, or receive advice from spectators. Broadcasts are for viewing and discussion, not assistance to active players.</p>
       </section>
       <section>
         <h2>5. Prohibited conduct</h2>

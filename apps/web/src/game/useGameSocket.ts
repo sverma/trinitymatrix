@@ -16,7 +16,8 @@ const pongTimeoutMs = 10_000;
 
 export function useGameSocket(enabled: boolean, onAuthenticationRequired?: (reason: string) => void) {
   const socketRef = useRef<WebSocket | null>(null);
-  const desiredQueue = useRef<PlayerCount | null>(null);
+  const desiredQueue = useRef<{ playerCount: PlayerCount; broadcast?: boolean | undefined } | null>(null);
+  const queueLeftExplicitly = useRef(false);
   const reconnectTimer = useRef<number | null>(null);
   const reconnectAttempt = useRef(0);
   const authenticatedPlayerId = useRef<string | null>(null);
@@ -25,7 +26,7 @@ export function useGameSocket(enabled: boolean, onAuthenticationRequired?: (reas
   const lastTechnicalDrop = useRef<AiPlayerForfeit | null>(null);
   const viewedPrivateRoom = useRef<PrivateRoom | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
-  const [queue, setQueue] = useState<{ joined: number; required: number; playerCount: PlayerCount } | null>(null);
+  const [queue, setQueue] = useState<{ joined: number; required: number; playerCount: PlayerCount; broadcast?: boolean | undefined } | null>(null);
   const [game, setGame] = useState<GamePublicState | null>(null);
   const [hand, setHand] = useState<Card[]>([]);
   const [playerId, setPlayerId] = useState<string | null>(null);
@@ -189,9 +190,14 @@ export function useGameSocket(enabled: boolean, onAuthenticationRequired?: (reas
             setConnection("connected");
             setConnectionGeneration((current) => current + 1);
             setNotice("Connected.");
-            if (desiredQueue.current) socket.send(JSON.stringify({ type: "queue.join", playerCount: desiredQueue.current }));
+            if (desiredQueue.current) socket.send(JSON.stringify({ type: "queue.join", ...desiredQueue.current }));
+            else if (queueLeftExplicitly.current) socket.send(JSON.stringify({ type: "queue.leave" }));
             startHeartbeat(socket);
           } else if (message.type === "queue.status") {
+            // A status already in flight must not undo the user's leave action.
+            // Initial/recovered server queue state remains accepted until then.
+            if (queueLeftExplicitly.current) return;
+            desiredQueue.current = { playerCount: message.playerCount, ...(message.broadcast ? { broadcast: true } : {}) };
             setQueue(message);
             setNotice(`${message.joined} of ${message.required} players joined the ${message.playerCount}-player queue.`);
           } else if (message.type === "game.started") {
@@ -392,14 +398,17 @@ export function useGameSocket(enabled: boolean, onAuthenticationRequired?: (reas
     };
   }, [enabled, onAuthenticationRequired]);
 
-  const joinQueue = (playerCount: PlayerCount) => {
-    desiredQueue.current = playerCount;
-    setQueue({ joined: 0, required: playerCount, playerCount });
-    setNotice(`Joining the ${playerCount}-player ranking queue…`);
-    send({ type: "queue.join", playerCount });
+  const joinQueue = (playerCount: PlayerCount, broadcast = false) => {
+    queueLeftExplicitly.current = false;
+    const selection = { playerCount, ...(broadcast ? { broadcast: true } : {}) };
+    desiredQueue.current = selection;
+    setQueue({ joined: 0, required: playerCount, ...selection });
+    setNotice(`Joining the ${playerCount}-player ${broadcast ? "broadcast" : "ranking"} queue…`);
+    send({ type: "queue.join", ...selection });
   };
 
   const leaveQueue = () => {
+    queueLeftExplicitly.current = true;
     desiredQueue.current = null;
     send({ type: "queue.leave" });
     setQueue(null);
@@ -419,6 +428,7 @@ export function useGameSocket(enabled: boolean, onAuthenticationRequired?: (reas
   const openPrivateRoom = (room: PrivateRoom) => {
     if (activeGameId.current) return;
     if (desiredQueue.current) send({ type: "queue.leave" });
+    queueLeftExplicitly.current = true;
     desiredQueue.current = null;
     setQueue(null);
     viewedPrivateRoom.current = room;

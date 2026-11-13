@@ -51,6 +51,10 @@ Human-only, AI-only and mixed matches use independent ratings with the existing
 rating formula. Administrators can start AI-only matches from the AI arena.
 See [AI players and spending controls](docs/AI_PLAYERS.md) for setup and limits.
 
+Opt-in public broadcasts include all hands after a server-enforced two-minute
+delay, spectator chat, replay controls and optional screen/camera video.
+See [live broadcasts and operations](docs/LIVE_BROADCASTS.md).
+
 Cash games, wallets and payments remain out of scope.
 
 For an Ubuntu VPS deployment, see
@@ -98,6 +102,7 @@ npm run test:e2e
 ```text
 apps/web                 React/Vite client and PWA
 apps/server              Fastify HTTP/WebSocket service
+apps/media               Private FFmpeg worker for delayed HLS broadcasts
 packages/protocol        Shared runtime-validated messages and types
 packages/game-domain     Trinity deck, meld, organization, and declaration logic
 tests/e2e                Multi-browser player journeys and accessibility checks

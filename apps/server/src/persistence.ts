@@ -1,6 +1,7 @@
 export interface StateStore {
   get<T>(key: string): Promise<T | null>;
   set(key: string, value: unknown, ttlMs?: number): Promise<void>;
+  setMany?(entries: readonly { key: string; value: unknown }[]): Promise<void>;
   delete(key: string): Promise<void>;
   consumeChallenge<T>(
     key: string,
@@ -60,6 +61,23 @@ redis.call('SET', KEYS[1], cjson.encode(challenge), 'PX', remaining_ms)
 return {'invalid', ''}
 `;
 
+const setManyScript = `
+local pairs = {}
+for i = 1, #KEYS do
+  pairs[#pairs + 1] = KEYS[i]
+  pairs[#pairs + 1] = ARGV[i]
+end
+return redis.call('MSET', unpack(pairs))
+`;
+
+function serializeEntries(entries: readonly { key: string; value: unknown }[]) {
+  return entries.map(({ key, value }) => {
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) throw new TypeError("State values must be JSON serializable.");
+    return { key, serialized };
+  });
+}
+
 export class RedisStateStore implements StateStore {
   constructor(private readonly redis: RedisLike, private readonly namespace = "trinitymatrix:v1") {}
 
@@ -79,6 +97,15 @@ export class RedisStateStore implements StateStore {
 
   async delete(key: string): Promise<void> {
     await this.redis.del(`${this.namespace}:${key}`);
+  }
+
+  async setMany(entries: readonly { key: string; value: unknown }[]): Promise<void> {
+    const serialized = serializeEntries(entries);
+    if (!serialized.length) return;
+    await this.redis.eval(setManyScript, {
+      keys: serialized.map(({ key }) => `${this.namespace}:${key}`),
+      arguments: serialized.map(({ serialized: value }) => value)
+    });
   }
 
   async consumeChallenge<T>(
@@ -122,6 +149,12 @@ export class MemoryStateStore implements StateStore {
 
   async delete(key: string): Promise<void> {
     this.values.delete(key);
+  }
+
+  async setMany(entries: readonly { key: string; value: unknown }[]): Promise<void> {
+    const serialized = serializeEntries(entries);
+    // Serialize the entire batch before changing any entry; no await splits application.
+    for (const { key, serialized: value } of serialized) this.values.set(key, { serialized: value, expiresAt: null });
   }
 
   async consumeChallenge<T>(

@@ -23,6 +23,11 @@ x-environment: &environment
   AI_PLAYERS_ENABLED: ${AI_PLAYERS_ENABLED:-false}
   OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
   AI_DAILY_BUDGET_USD: ${AI_DAILY_BUDGET_USD:-10}
+  BROADCASTS_ENABLED: ${BROADCASTS_ENABLED:-false}
+  BROADCAST_MEDIA_ENABLED: ${BROADCAST_MEDIA_ENABLED:-false}
+  BROADCAST_MEDIA_URL: http://media:8082
+  BROADCAST_MEDIA_SECRET: ${BROADCAST_MEDIA_SECRET:-}
+  BROADCAST_MAX_VIDEO_STREAMS: ${BROADCAST_MAX_VIDEO_STREAMS:-1}
   AUTH_STATE_EPOCH: ${AUTH_STATE_EPOCH:?Required}
   OTP_HASH_SECRET: ${OTP_HASH_SECRET:?Required}
   RESEND_API_KEY: ${RESEND_API_KEY:-}
@@ -90,6 +95,31 @@ services:
       - -ec
       - export DATABASE_SSL_CA="$$(cat /run/trinitymatrix/postgres-ca.crt)"; exec node --enable-source-maps dist/db/migrate-cli.js
 
+  media:
+    profiles: [broadcast-media]
+    image: trinitymatrix-media:${TRINITY_RELEASE:-single-host}
+    build:
+      context: ../..
+      dockerfile: apps/media/Dockerfile
+    restart: unless-stopped
+    environment:
+      BROADCAST_MEDIA_SECRET: ${BROADCAST_MEDIA_SECRET:?Generate the media secret with bootstrap-runtime.sh}
+      MEDIA_MAX_STREAMS: ${BROADCAST_MAX_VIDEO_STREAMS:-1}
+      MEDIA_MAX_STORAGE_BYTES: "2147483648"
+      MEDIA_RETENTION_SECONDS: "21600"
+    volumes: [media-data:/data/media]
+    read_only: true
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 0.75
+    mem_limit: 512m
+    pids_limit: 128
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
   postgres:
     image: postgres:16.10-alpine
     restart: unless-stopped
@@ -138,3 +168,4 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  media-data:

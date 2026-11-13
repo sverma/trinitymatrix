@@ -26,6 +26,11 @@ services:
       APP_BUILD_TIME: local
       TRUST_PROXY: "false"
       SHUTDOWN_GRACE_PERIOD_MS: "10000"
+      BROADCASTS_ENABLED: ${BROADCASTS_ENABLED:-false}
+      BROADCAST_MEDIA_ENABLED: ${BROADCAST_MEDIA_ENABLED:-false}
+      BROADCAST_MEDIA_URL: http://media:8082
+      BROADCAST_MEDIA_SECRET: ${BROADCAST_MEDIA_SECRET:-local-media-secret-for-development-only}
+      BROADCAST_MAX_VIDEO_STREAMS: "1"
     ports:
       - "${TRINITY_APP_BIND:-127.0.0.1:8180}:8080"
     depends_on:
@@ -47,6 +52,24 @@ services:
       retries: 10
       start_period: 10s
     stop_grace_period: 15s
+
+  media:
+    profiles: [broadcast-media]
+    build:
+      context: .
+      dockerfile: apps/media/Dockerfile
+    environment:
+      BROADCAST_MEDIA_SECRET: ${BROADCAST_MEDIA_SECRET:-local-media-secret-for-development-only}
+      MEDIA_MAX_STREAMS: "1"
+    ports: ["127.0.0.1:8182:8082"]
+    volumes: [trinitymatrix_media:/data/media]
+    read_only: true
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 0.75
+    mem_limit: 512m
+    pids_limit: 128
 
   redis:
     image: redis:7.4-alpine
@@ -91,3 +114,4 @@ services:
 volumes:
   trinitymatrix_redis:
   trinitymatrix_postgres:
+  trinitymatrix_media:

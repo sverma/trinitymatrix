@@ -68,6 +68,9 @@ import { PostgresAiStore } from "./ai-repository";
 import { OpenRouterAgentClient } from "./ai-openrouter";
 import { AiPlayers } from "./ai-players";
 import { registerAiPlayerRoutes } from "./ai-routes";
+import { PostgresBroadcastRepository } from "./broadcast-repository";
+import { registerBroadcastRoutes } from "./broadcast-routes";
+import { registerBroadcastMediaRoutes } from "./broadcast-media-routes";
 
 const config = loadRuntimeConfig(process.env);
 assertServerAuthConfig(config);
@@ -98,7 +101,7 @@ await app.register(helmet, {
       styleSrc: ["'self'"],
       imgSrc: ["'self'", "data:", "blob:"],
       fontSrc: ["'self'"],
-      mediaSrc: ["'self'"],
+      mediaSrc: ["'self'", "blob:"],
       connectSrc: ["'self'", ...allowedSocketOrigins],
       workerSrc: ["'self'"],
       manifestSrc: ["'self'"],
@@ -119,7 +122,7 @@ app.addHook("onRequest", async (request, reply) => {
     || ["/healthz", "/readyz", "/version", "/policy-metadata.js"].includes(request.url)) {
     reply.header("Cache-Control", "no-store");
   }
-  reply.header("Permissions-Policy", "accelerometer=(), camera=(), geolocation=(), microphone=(), payment=(), usb=()");
+  reply.header("Permissions-Policy", "accelerometer=(), camera=(self), display-capture=(self), geolocation=(), microphone=(self), payment=(), usb=()");
   reply.header("Origin-Agent-Cluster", "?1");
   const origin = request.headers.origin;
   if (request.url.startsWith("/api/") && origin && !config.allowedOrigins.has(origin)) {
@@ -180,6 +183,7 @@ const auth = new AuthService(emailSender, store, {
   ...(config.authProvider === "mock" ? { fixedCode: config.mockOtpCode } : {})
 }, repository ?? undefined);
 const archive = repository ? new PostgresGameArchive(repository) : undefined;
+const broadcastRepository = postgres && config.broadcastsEnabled ? new PostgresBroadcastRepository(postgres) : null;
 const instanceId = `${config.appRevision.slice(0, 24)}-${randomUUID()}`;
 // A single-server install retains replay events in its backed-up PostgreSQL
 // database. Distributed production additionally requires the S3 export worker.
@@ -253,7 +257,8 @@ if (config.gameplayRuntimeMode === "distributed") {
 const matchmaker = distributedMatchmaker ?? new Matchmaker(
   store,
   (error) => app.log.error({ err: error }, "Could not persist match state"),
-  archive
+  archive,
+  broadcastRepository ? (snapshot) => broadcastRepository.enableForGame(snapshot) : undefined
 );
 const aiStore = postgres && config.aiPlayersEnabled ? new PostgresAiStore(postgres) : null;
 if (aiStore) await aiStore.provision();
@@ -425,8 +430,36 @@ await registerAiPlayerRoutes(app, {
   resolveAdminAccess: hasAdminAccess,
   adminEmails: config.adminEmails,
   isReady: () => redisReady && stateHydrated && !shuttingDown,
-  dailyBudgetUsd: config.aiDailyBudgetUsd
+  dailyBudgetUsd: config.aiDailyBudgetUsd,
+  broadcastGameName: (gameId) => matchmaker instanceof Matchmaker ? matchmaker.broadcastGameName(gameId) : null
 });
+
+app.get("/api/live/capabilities", { config: { rateLimit: { max: 90, timeWindow: "1 minute" } } }, async (request, reply) => {
+  reply.header("Cache-Control", "no-store");
+  if (!(await auth.getSession(request.cookies.rm_session))) return reply.code(401).send({ error: "Authentication required." });
+  return { enabled: Boolean(broadcastRepository), videoEnabled: Boolean(broadcastRepository && config.broadcastMediaEnabled), delayMs: 120_000 };
+});
+if (broadcastRepository && postgres) {
+  const resolveSession = async (request: FastifyRequest) => auth.getSession(request.cookies.rm_session);
+  const resolveBroadcastAdmin = async (request: FastifyRequest) => {
+    const session = await resolveSession(request);
+    return Boolean(session && config.adminEmails.has(session.profile.email.trim().toLowerCase()) && await hasAdminAccess(request));
+  };
+  const isReady = () => redisReady && stateHydrated && !shuttingDown;
+  const media = registerBroadcastMediaRoutes(app, {
+    pool: postgres, repository: broadcastRepository, resolveSession, resolveAdminAccess: resolveBroadcastAdmin,
+    allowedOrigins: config.allowedOrigins, isReady, enabled: config.broadcastMediaEnabled,
+    mediaUrl: config.broadcastMediaUrl, mediaSecret: config.broadcastMediaSecret, maximumStreams: config.broadcastMaxVideoStreams
+  });
+  registerBroadcastRoutes(app, {
+    repository: broadcastRepository, resolveSession, resolveAdminAccess: resolveBroadcastAdmin,
+    allowedOrigins: config.allowedOrigins, isReady, onClosed: media.closeForBroadcast
+  });
+} else {
+  const unavailable = async (_request: FastifyRequest, reply: import("fastify").FastifyReply) => reply.code(503).send({ error: "Live broadcasting is unavailable." });
+  app.get("/api/live", unavailable);
+  app.route({ method: ["GET", "POST", "DELETE"], url: "/api/live/*", handler: unavailable });
+}
 
 if (repository) {
   await registerDurableDataRoutes(app, {

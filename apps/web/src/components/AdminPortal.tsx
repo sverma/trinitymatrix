@@ -10,8 +10,9 @@ import {
 import { AuthFlow } from "./AuthFlow";
 import { AdminPasskeyGate } from "./AdminPasskeyGate";
 import { AdminAiArena } from "./AdminAiArena";
+import { AdminLiveReports } from "./LiveBroadcast";
 
-type AdminSection = "overview" | "users" | "games" | "ai";
+type AdminSection = "overview" | "users" | "games" | "ai" | "broadcasts";
 type MatchTypeFilter = "all" | "general" | "private";
 type GameStatusFilter = "all" | AdminGame["status"];
 const liveRefreshIntervalMs = 15_000;
@@ -374,7 +375,7 @@ function AdminWorkspace({ onLogout }: { onLogout: () => Promise<void> }) {
     <aside className="admin-sidebar">
       <a className="wordmark admin-wordmark" href="/" aria-label="TrinityMatrix admin home"><span>TM</span><span>TrinityMatrix<small>Admin portal</small></span></a>
       <nav aria-label="Admin navigation">
-        {(["overview", "users", "games", "ai"] as const).map((item) => <button type="button" key={item} className={section === item ? "active" : ""} aria-current={section === item ? "page" : undefined} onClick={() => setSection(item)}>{item === "ai" ? "AI arena" : item}</button>)}
+        {(["overview", "users", "games", "ai", "broadcasts"] as const).map((item) => <button type="button" key={item} className={section === item ? "active" : ""} aria-current={section === item ? "page" : undefined} onClick={() => setSection(item)}>{item === "ai" ? "AI arena" : item}</button>)}
       </nav>
       <button type="button" className="text-button" onClick={() => void onLogout()}>Sign out</button>
       <p>Audited staging operations</p>
@@ -384,6 +385,7 @@ function AdminWorkspace({ onLogout }: { onLogout: () => Promise<void> }) {
       {section === "users" && <UsersView />}
       {section === "games" && <GamesView />}
       {section === "ai" && <AdminAiArena />}
+      {section === "broadcasts" && <AdminLiveReports />}
     </main>
   </div>;
 }

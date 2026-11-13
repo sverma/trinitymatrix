@@ -87,6 +87,11 @@ const environmentSchema = z.object({
   AI_PLAYERS_ENABLED: booleanString.default("false"),
   OPENROUTER_API_KEY: z.string().trim().min(1).optional().or(z.literal("")),
   AI_DAILY_BUDGET_USD: z.coerce.number().positive().max(10).default(10),
+  BROADCASTS_ENABLED: booleanString.default("false"),
+  BROADCAST_MEDIA_ENABLED: booleanString.default("false"),
+  BROADCAST_MEDIA_URL: z.string().url().optional().or(z.literal("")),
+  BROADCAST_MEDIA_SECRET: z.string().min(32).max(256).regex(/^\S+$/).optional().or(z.literal("")),
+  BROADCAST_MAX_VIDEO_STREAMS: z.coerce.number().int().min(1).max(4).default(1),
   LOAD_METRICS_ENABLED: booleanString.default("false"),
   LOAD_METRICS_TOKEN: z.string().min(32).regex(/^\S+$/, "LOAD_METRICS_TOKEN cannot contain whitespace").optional(),
   CLOUDWATCH_EMF_ENABLED: booleanString.default("false"),
@@ -224,6 +229,15 @@ export function loadRuntimeConfig(environment: NodeJS.ProcessEnv) {
   if (env.AI_PLAYERS_ENABLED === "true" && (!env.DATABASE_URL || env.GAMEPLAY_RUNTIME_MODE !== "single")) {
     throw new Error("AI_PLAYERS_ENABLED requires PostgreSQL and the single-instance gameplay runtime.");
   }
+  if (env.BROADCASTS_ENABLED === "true" && (!env.DATABASE_URL || env.GAMEPLAY_RUNTIME_MODE !== "single")) {
+    throw new Error("BROADCASTS_ENABLED requires PostgreSQL and the single-instance gameplay runtime.");
+  }
+  if (env.BROADCAST_MEDIA_ENABLED === "true" && (env.BROADCASTS_ENABLED !== "true" || !env.BROADCAST_MEDIA_URL || !env.BROADCAST_MEDIA_SECRET)) {
+    throw new Error("Broadcast video requires broadcasting, a private media URL and a service secret.");
+  }
+  if (env.BROADCAST_MEDIA_URL && !["http:", "https:"].includes(new URL(env.BROADCAST_MEDIA_URL).protocol)) {
+    throw new Error("BROADCAST_MEDIA_URL must use HTTP or HTTPS.");
+  }
 
   return {
     nodeEnv: env.NODE_ENV,
@@ -232,6 +246,11 @@ export function loadRuntimeConfig(environment: NodeJS.ProcessEnv) {
     aiPlayersEnabled: env.AI_PLAYERS_ENABLED === "true",
     openRouterApiKey: env.OPENROUTER_API_KEY,
     aiDailyBudgetUsd: env.AI_DAILY_BUDGET_USD,
+    broadcastsEnabled: env.BROADCASTS_ENABLED === "true",
+    broadcastMediaEnabled: env.BROADCAST_MEDIA_ENABLED === "true",
+    broadcastMediaUrl: env.BROADCAST_MEDIA_URL || undefined,
+    broadcastMediaSecret: env.BROADCAST_MEDIA_SECRET || undefined,
+    broadcastMaxVideoStreams: env.BROADCAST_MAX_VIDEO_STREAMS,
     redisUrl: env.REDIS_URL,
     stateNamespace: env.STATE_NAMESPACE,
     databaseUrl: env.DATABASE_URL,

@@ -10,6 +10,7 @@ import { PrivateRoomQueue, Queue } from "./components/Queue";
 import { useGameSocket } from "./game/useGameSocket";
 import { registerPwa } from "./pwa";
 import { unlockTurnSounds } from "./audio/turnSounds";
+import { WatchApp, isWatchLocation } from "./components/LiveBroadcast";
 
 function PlayerApp() {
   const [player, setPlayer] = useState<AuthPlayer | null>(null);
@@ -108,7 +109,7 @@ function PlayerApp() {
       connected={socket.connection === "connected" && socket.playerId !== null}
       onOpenPrivateRoom={socket.openPrivateRoom}
       onSectionChange={setPlayerSection}
-      onJoin={(count) => { setPlayerSection("play"); socket.joinQueue(count); }}
+      onJoin={(count, broadcast) => { setPlayerSection("play"); socket.joinQueue(count, broadcast); }}
       onLogout={async () => { await api.logout(); setPlayerSection("play"); setPlayer(null); }}
       onUpdateProfile={async (profile) => {
         const result = await api.updateProfile(profile);
@@ -129,5 +130,6 @@ function PlayerApp() {
 export function App() {
   const policyPage = getPolicyPage(window.location.pathname);
   if (policyPage) return <PolicyPage page={policyPage} />;
+  if (isWatchLocation(window.location)) return <WatchApp />;
   return isAdminLocation(window.location) ? <AdminPortal /> : <PlayerApp />;
 }

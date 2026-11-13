@@ -4,10 +4,17 @@ import type {
   PlayerCount,
   PrivateInvitation,
   PrivateRoom,
-  ProfileBadgeId
+  ProfileBadgeId,
+  LiveBroadcastSummary,
+  BroadcastFrame,
+  BroadcastComment
 } from "@trinitymatrix/protocol";
 
 const jsonHeaders = { "Content-Type": "application/json" };
+
+export class HttpApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); this.name = "HttpApiError"; }
+}
 
 async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -23,7 +30,7 @@ async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
   if (response.status === 204) return undefined as T;
 
   const body = await response.json().catch(() => null) as (T & { error?: string }) | null;
-  if (!response.ok) throw new Error(body?.error ?? "The request failed.");
+  if (!response.ok) throw new HttpApiError(body?.error ?? "The request failed.", response.status);
   if (body === null) throw new Error("The game service returned an invalid response. Please retry.");
   return body;
 }
@@ -241,6 +248,28 @@ export type PrivateMatchOverview = {
   createdRooms: PrivateRoom[];
 };
 
+export type LiveDirectoryFilters = { composition?: "all" | "human" | "ai" | "mixed"; status?: "all" | "live" | "ended"; q?: string; cursor?: string };
+export type LiveBroadcastDetail = { broadcast: LiveBroadcastSummary; frame: BroadcastFrame | null; comments: BroadcastComment[]; serverNow: number; canModerate: boolean };
+export type BroadcastTimelineEntry = Pick<BroadcastFrame, "sequence" | "capturedAt" | "event">;
+export type BroadcastVideoLimits = { width: number; height: number; frameRate: number; maxDurationSeconds: number };
+export type BroadcastVideoInfo = {
+  enabled: boolean; canPublish: boolean; serverNow: number; limits: BroadcastVideoLimits;
+  video: null | { id: string; status: "starting" | "buffering" | "live" | "stopped" | "interrupted" | "expired"; availableAt: number; playlistUrl: string | null; publisherName?: string };
+};
+export type BroadcastVideoSession = { id: string; uploadUrl: string; stopUrl: string; availableAt: number; limits: BroadcastVideoLimits };
+export type BroadcastReport = { id: string; broadcastName: string; comment: BroadcastComment; reason: string; createdAt: number };
+
+function livePath(gameName: string) { return `/api/live/${encodeURIComponent(gameName)}`; }
+
+/** Upload/playlist endpoints must remain on this origin; no credentials follow external URLs. */
+export function sameOriginMediaPath(value: string): string {
+  const url = new URL(value, window.location.origin);
+  if (url.origin !== window.location.origin || url.username || url.password || !url.pathname.startsWith("/api/live/")) {
+    throw new Error("The video service returned an invalid media address.");
+  }
+  return `${url.pathname}${url.search}`;
+}
+
 export type AdminGameDetail = {
   game: AdminGame;
   events?: ReplayEvent[];
@@ -254,6 +283,38 @@ function gamePath(gameName: string, resource: "replay" | "chat") {
 }
 
 export const api = {
+  liveCapabilities: (signal?: AbortSignal) => jsonRequest<{ enabled: boolean; videoEnabled: boolean; delayMs: number }>("/api/live/capabilities", signal ? { signal } : undefined),
+  liveDirectory: (filters: LiveDirectoryFilters = {}, signal?: AbortSignal) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) if (value && value !== "all") query.set(key, value);
+    return jsonRequest<{ broadcasts: LiveBroadcastSummary[]; nextCursor: string | null; serverNow: number }>(`/api/live${query.size ? `?${query}` : ""}`, signal ? { signal } : undefined);
+  },
+  liveBroadcast: (gameName: string, signal?: AbortSignal) => jsonRequest<LiveBroadcastDetail>(livePath(gameName), signal ? { signal } : undefined),
+  closeLiveBroadcast: (gameName: string) => jsonRequest<void>(`${livePath(gameName)}/close`, { method: "POST" }),
+  broadcastTimeline: (gameName: string, beforeSequence?: number, signal?: AbortSignal) => jsonRequest<{ frames: BroadcastTimelineEntry[]; nextCursor: string | null }>(
+    `${livePath(gameName)}/timeline?limit=30${beforeSequence === undefined ? "" : `&beforeSequence=${beforeSequence}`}`, signal ? { signal } : undefined),
+  broadcastFrame: (gameName: string, sequence: number, signal?: AbortSignal) => jsonRequest<{ frame: BroadcastFrame }>(`${livePath(gameName)}/frames/${sequence}`, signal ? { signal } : undefined),
+  postBroadcastComment: (gameName: string, message: string, clientMessageId: string) => jsonRequest<{ comment?: BroadcastComment; availableAt: number; delayed: boolean }>(`${livePath(gameName)}/comments`, {
+    method: "POST", headers: jsonHeaders, body: JSON.stringify({ message, clientMessageId })
+  }),
+  deleteBroadcastComment: (gameName: string, commentId: string) => jsonRequest<void>(`${livePath(gameName)}/comments/${encodeURIComponent(commentId)}`, { method: "DELETE" }),
+  reportBroadcastComment: (gameName: string, commentId: string, reason: string) => jsonRequest<void>(`${livePath(gameName)}/comments/${encodeURIComponent(commentId)}/report`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ reason }) }),
+  liveVideo: (gameName: string, signal?: AbortSignal) => jsonRequest<BroadcastVideoInfo>(`${livePath(gameName)}/video`, signal ? { signal } : undefined),
+  startBroadcastVideo: (gameName: string) => jsonRequest<BroadcastVideoSession>(`${livePath(gameName)}/video/start`, { method: "POST", signal: AbortSignal.timeout(15_000) }),
+  uploadBroadcastVideo: async (uploadUrl: string, sequence: number, chunk: Blob, signal?: AbortSignal) => {
+    if (!Number.isSafeInteger(sequence) || sequence < 0 || chunk.size < 1 || chunk.size > 512 * 1024) throw new Error("The video chunk is outside the upload limits.");
+    const path = sameOriginMediaPath(uploadUrl);
+    const separator = path.includes("?") ? "&" : "?";
+    const timeout = AbortSignal.timeout(15_000);
+    const response = await fetch(`${path}${separator}sequence=${sequence}`, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/octet-stream" }, body: chunk, cache: "no-store", signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as { error?: string } | null;
+      throw new Error(body?.error ?? "The video upload was interrupted.");
+    }
+  },
+  stopBroadcastVideo: (stopUrl: string) => jsonRequest<void>(sameOriginMediaPath(stopUrl), { method: "POST", keepalive: true, signal: AbortSignal.timeout(10_000) }),
+  broadcastReports: (cursor?: string) => jsonRequest<{ reports: BroadcastReport[]; nextCursor: string | null }>(`/api/admin/live/reports?limit=25${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`),
+  resolveBroadcastReport: (reportId: string, removeComment: boolean) => jsonRequest<void>(`/api/admin/live/reports/${encodeURIComponent(reportId)}/resolve`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ removeComment }) }),
   session: () => jsonRequest<{ authenticated: boolean; player?: AuthPlayer; isAdmin?: boolean; adminUnlocked?: boolean }>("/api/session"),
   adminPasskeyStatus: () => jsonRequest<AdminPasskeyStatus>("/api/admin/passkeys/status"),
   adminPasskeyRegistrationOptions: (input: { deviceName: string; bootstrapCode?: string; recoveryCode?: string }) =>
@@ -330,15 +391,15 @@ export const api = {
     `/api/rankings${composition ? `?composition=${composition}` : ""}`
   ),
   aiPlayers: (signal?: AbortSignal) => jsonRequest<AiPlayerRoster>("/api/ai/players", signal ? { signal } : undefined),
-  startAiMatch: (agentIds: string[]) => jsonRequest<{ gameId: string }>("/api/ai/matches", {
+  startAiMatch: (agentIds: string[], broadcast = false) => jsonRequest<{ gameId: string; gameName?: string }>("/api/ai/matches", {
     method: "POST",
     headers: jsonHeaders,
-    body: JSON.stringify({ agentIds })
+    body: JSON.stringify({ agentIds, ...(broadcast ? { broadcast: true } : {}) })
   }),
-  startAdminAiMatch: (agentIds: string[]) => jsonRequest<{ gameId: string }>("/api/admin/ai/matches", {
+  startAdminAiMatch: (agentIds: string[], broadcast = false) => jsonRequest<{ gameId: string; gameName?: string }>("/api/admin/ai/matches", {
     method: "POST",
     headers: jsonHeaders,
-    body: JSON.stringify({ agentIds })
+    body: JSON.stringify({ agentIds, ...(broadcast ? { broadcast: true } : {}) })
   }),
   matchHistory: (signal?: AbortSignal) => jsonRequest<CollectionResponse<"games", MatchHistoryEntry>>(
     "/api/me/history",

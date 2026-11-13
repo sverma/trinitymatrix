@@ -16,7 +16,7 @@ jobs:
   application:
     name: Application and browser tests
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
 
     services:
       postgres:
@@ -65,12 +65,13 @@ jobs:
       - name: Run unit tests
         run: npm run test:unit
 
-      - name: Run isolated AI persistence tests
+      - name: Run isolated AI and broadcast persistence tests
         env:
           AI_RATINGS_TEST_DATABASE_URL: postgresql://trinitymatrix:trinitymatrix@127.0.0.1:5433/trinity_ai_test
         run: |
           node --input-type=module -e "import pg from 'pg'; const c=new pg.Client({connectionString:'postgresql://trinitymatrix:trinitymatrix@127.0.0.1:5433/trinitymatrix'}); await c.connect(); await c.query('CREATE DATABASE trinity_ai_test'); await c.end();"
           npm run test -w @trinitymatrix/server -- src/db/ai-ratings.integration.test.ts
+          npm run test -w @trinitymatrix/server -- src/broadcast.integration.test.ts
 
       - name: Run load harness safety tests
         run: npm run test:load
@@ -81,7 +82,20 @@ jobs:
       - name: Install Chromium test runtime
         run: npx playwright install --with-deps chromium
 
+      - name: Verify real media codecs and start the private test worker
+        run: |
+          docker build -f apps/media/Dockerfile -t trinitymatrix-media:ci .
+          docker run --rm --read-only --cpus=0.75 --memory=512m --pids-limit=128 --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:size=64m -e TRINITY_MEDIA_REAL_FFMPEG=1 --mount type=bind,src="$PWD/apps/media",dst=/test,readonly --entrypoint node trinitymatrix-media:ci --test /test/test/worker.test.mjs /test/test/ffmpeg.test.mjs
+          docker run -d --name trinitymatrix-media-ci --read-only --cpus=0.75 --memory=512m --pids-limit=128 --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:size=64m -v trinitymatrix-media-ci:/data/media -p 127.0.0.1:8182:8082 -e BROADCAST_MEDIA_SECRET=local-media-secret-for-development-only trinitymatrix-media:ci
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent -H 'X-Trinity-Media-Key: local-media-secret-for-development-only' http://127.0.0.1:8182/healthz >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+
       - name: Run browser and accessibility tests
+        env:
+          TRINITY_E2E_BROADCASTS: "true"
         run: npm run test:e2e
 
       - name: Build the production container
