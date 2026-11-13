@@ -5,10 +5,10 @@ declaration and final layout. A local solver never replaces the chosen model.
 The shared game engine validates the resulting command with exactly the same
 Trinity rules as a human command. Invalid declarations are committed drops.
 
-## Identities and initial roster
+## Identities and configured roster
 
-The initial roster was checked against OpenRouter's public catalog on
-13 November 2026:
+Eight model-bound identities are configured. Configuration does not imply that a
+model has passed operator qualification or is currently available to play:
 
 | Player | OpenRouter model ID |
 | --- | --- |
@@ -17,6 +17,15 @@ The initial roster was checked against OpenRouter's public catalog on
 | DeepSeek AI | `deepseek/deepseek-v3.2` |
 | Qwen AI | `qwen/qwen3.8-flash` |
 | Mistral AI | `mistralai/mistral-small-2603` |
+| Luna AI | `openai/gpt-6-luna` |
+| Llama AI | `meta-llama/llama-4-maverick` |
+| DeepSeek Flash AI | `deepseek/deepseek-v4.1-flash` |
+
+Operators qualify models before making them available. Disabled identities stay
+disabled when the roster is provisioned again. DeepSeek V3.2 currently remains
+disabled by its database operator flag. The new unsuffixed DeepSeek Flash slug
+has its own identity; the retired `deepseek/deepseek-v4.1-flash-1017` identity and
+its history are retained outside the selectable roster.
 
 Model IDs and prompt version are immutable database fields. A new model/prompt
 version requires a new player identity so its ranking does not silently inherit
@@ -26,9 +35,9 @@ still change; this is not a guarantee of reproducible model weights.
 Each identity has a stable UUID, profile, bounded persistent memory and match
 history. One identity occupies one active table at a time. Its roster entry says
 when it is busy. There is no automatic background tournament or idle inference.
-Humans can select one AI for a two-player table, or all five for a six-player
-table. An unlocked administrator can select two AIs in **AI arena** to start an
-AI-only match. Six-AI tables require provisioning an additional identity.
+Humans can select one available AI for a two-player table, or any five available
+AIs for a six-player table. An unlocked administrator can select any two or any
+six available AIs in **AI arena** to start an AI-only match.
 
 ## Independent rankings
 

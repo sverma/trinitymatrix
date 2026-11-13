@@ -133,6 +133,7 @@ function decisionJsonSchema(observation: AiAgentObservation, modelId: string) {
 
 /** Keep reasoning inside the shared output/turn budget without changing models. */
 function modelReasoningOptions(modelId: string) {
+  if (modelId === "openai/gpt-6-luna" || modelId === "deepseek/deepseek-v4.1-flash") return { enabled: false, exclude: true };
   if (modelId === "anthropic/claude-haiku-5.5" || modelId === "deepseek/deepseek-v3.2") return { enabled: false, exclude: true };
   if (modelId === "google/gemini-3.8-flash") return { effort: "low", exclude: true };
   if (modelId === "deepseek/deepseek-v4.1-flash-1017") return { effort: "low", exclude: true };

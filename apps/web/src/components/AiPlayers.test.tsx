@@ -71,6 +71,35 @@ describe("AI opponent selection", () => {
     expect(JSON.parse(String(post[1]?.body))).toEqual({ agentIds: agents.slice(0, 5).map((agent) => agent.id) });
   });
 
+  it("selects players beyond the original five while preserving the five-opponent table limit", async () => {
+    const user = userEvent.setup();
+    const expanded = Array.from({ length: 8 }, (_, index) => ({
+      ...agents[0]!,
+      id: `00000000-0000-4000-8000-00000000000${index + 1}`,
+      displayName: `Agent ${index + 1}`,
+      modelId: `provider/model-${index + 1}-explicitly-versioned-language-model`,
+      modelName: `Model ${index + 1}`,
+      available: index !== 2,
+      ...(index === 2 ? { reason: "Model paused for qualification" } : {})
+    }));
+    const fetchMock = mockArena({ enabled: true, players: expanded, dailyBudgetUsd: 10 });
+    render(<AiPlayers connected privateTableOpen={false} />);
+    await user.click(await screen.findByRole("radio", { name: "Select Agent 8" }));
+    expect(screen.getAllByRole("radio", { name: /^Select Agent/ })).toHaveLength(8);
+    expect(screen.getByRole("radio", { name: "Select Agent 8" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Select Agent 3" })).toBeDisabled();
+    expect(screen.getByText(expanded[7]!.modelId)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: /Five AI opponents/ }));
+    expect(screen.getAllByRole("checkbox", { name: /^Select Agent/ })).toHaveLength(8);
+    const selected = [0, 1, 4, 6, 7];
+    for (const index of selected) await user.click(screen.getByRole("checkbox", { name: `Select Agent ${index + 1}` }));
+    expect(screen.getByRole("checkbox", { name: "Select Agent 4" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Play against selected AIs" }));
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(String(post[1]?.body))).toEqual({ agentIds: selected.map((index) => expanded[index]!.id) });
+  });
+
   it("keeps a failed reservation recoverable and shows the server's availability reason", async () => {
     const user = userEvent.setup();
     mockArena(undefined, "The daily AI budget has been reached.");

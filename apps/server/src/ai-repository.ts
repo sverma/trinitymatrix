@@ -8,7 +8,10 @@ export const INITIAL_AI_ROSTER = [
   { modelId: "google/gemini-3.8-flash", modelName: "Gemini 3.8 Flash", displayName: "Gemini AI" },
   { modelId: "deepseek/deepseek-v3.2", modelName: "DeepSeek V3.2", displayName: "DeepSeek AI" },
   { modelId: "qwen/qwen3.8-flash", modelName: "Qwen3.8 Flash", displayName: "Qwen AI" },
-  { modelId: "mistralai/mistral-small-2603", modelName: "Mistral Small 4", displayName: "Mistral AI" }
+  { modelId: "mistralai/mistral-small-2603", modelName: "Mistral Small 4", displayName: "Mistral AI" },
+  { modelId: "openai/gpt-6-luna", modelName: "GPT-6 Luna", displayName: "Luna AI" },
+  { modelId: "meta-llama/llama-4-maverick", modelName: "Llama 4 Maverick", displayName: "Llama AI" },
+  { modelId: "deepseek/deepseek-v4.1-flash", modelName: "DeepSeek V4.1 Flash", displayName: "DeepSeek Flash AI" }
 ] as const;
 
 export type AiIdentity = {

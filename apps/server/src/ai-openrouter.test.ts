@@ -114,6 +114,10 @@ describe("model-bound OpenRouter player", () => {
   });
 
   it.each([
+    { id: "openai/gpt-6-luna", reasoning: { enabled: false, exclude: true } },
+    { id: "openai/gpt-6-luna-preview", reasoning: undefined },
+    { id: "deepseek/deepseek-v4.1-flash", reasoning: { enabled: false, exclude: true } },
+    { id: "meta-llama/llama-4-maverick", reasoning: undefined },
     { id: "deepseek/deepseek-v4.1-flash-1017", reasoning: { effort: "low", exclude: true } },
     { id: "mistralai/mistral-large-4-0", reasoning: { enabled: false, exclude: true } },
     { id: "qwen/qwen3.8-flash", reasoning: { max_tokens: 256, exclude: true } },
