@@ -674,6 +674,42 @@ describe("v2 model-controlled winning protocol", () => {
 });
 
 describe("v3 validation-only model play", () => {
+  it.each([
+    { id: "openai/gpt-6.1-terra", old: { enabled: false, exclude: true }, current: { effort: "low", exclude: true } },
+    { id: "openai/gpt-5.4-mini", old: { enabled: false, exclude: true }, current: { effort: "low", exclude: true } },
+    { id: "openai/gpt-6-luna", old: { enabled: false, exclude: true }, current: { effort: "low", exclude: true } },
+    { id: "anthropic/claude-haiku-5.5", old: { enabled: false, exclude: true }, current: { effort: "low", exclude: true } },
+    { id: "deepseek/deepseek-v4.1-flash", old: { enabled: false, exclude: true }, current: { effort: "low", exclude: true } },
+    { id: "deepseek/deepseek-v3.2", old: { enabled: false, exclude: true }, current: { effort: "low", exclude: true } },
+    { id: "deepseek/deepseek-v4.1-flash-1017", old: { effort: "low", exclude: true }, current: { effort: "low", exclude: true } },
+    { id: "google/gemini-3.8-flash", old: { effort: "low", exclude: true }, current: { effort: "low", exclude: true } },
+    { id: "qwen/qwen3.8-flash", old: { max_tokens: 256, exclude: true }, current: { max_tokens: 512, exclude: true } },
+    { id: "nvidia/nemotron-3-ultra-550b-a55b", old: { enabled: false, exclude: true }, current: { max_tokens: 512, exclude: true } },
+    { id: "xiaomi/mimo-v2.6-flash", old: { enabled: false, exclude: true }, current: { enabled: true, exclude: true } },
+    { id: "z-ai/glm-5", old: { enabled: false, exclude: true }, current: { enabled: true, exclude: true } },
+    { id: "mistralai/mistral-large-4-0", old: { enabled: false, exclude: true }, current: { enabled: true, exclude: true } },
+    { id: "meta-llama/llama-4-maverick", old: undefined, current: undefined },
+    { id: "qwen/unverified-model", old: undefined, current: undefined }
+  ])("allows bounded v3 planning for $id while preserving exact v2 inference settings", async ({ id, old, current }) => {
+    const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(decision(), { model: id })));
+    const client = new OpenRouterAgentClient({ apiKey, fetch: fetcher });
+    for (const protocolId of [AI_GAME_PROTOCOL_IDENTITY_VERSION, AI_VALIDATION_IDENTITY_VERSION]) {
+      await client.decide({ protocolId, modelId: id, observation: observation(), memory: "" });
+    }
+    const bodies = fetcher.mock.calls.map((call) => JSON.parse(String(call[1]?.body)));
+    expect(bodies[0].reasoning).toEqual(old);
+    expect(bodies[1].reasoning).toEqual(current);
+    for (const body of bodies) {
+      expect(body.model).toBe(id); expect(body).not.toHaveProperty("models");
+      expect(body.max_tokens).toBe(1600);
+      expect(body.provider).toEqual({ require_parameters: true, sort: "latency", data_collection: "deny",
+        max_price: { prompt: 1, completion: 5, request: 0 } });
+      if (body.reasoning) expect(body.reasoning.exclude).toBe(true);
+    }
+    expect(AI_MAX_DECISION_TIME_MS).toBe(20_000);
+    expect(AI_REQUEST_RESERVATION_USD).toBe(0.05);
+  });
+
   it("defaults to v3 with only observation, memory and static metadata, without narrowing a winning hand to declare", async () => {
     const chosen = decision({ action: "discard", cardId: missedWinDeclaration.cardId });
     const fetcher = vi.fn<typeof fetch>(async () => jsonResponse(providerBody(chosen)));

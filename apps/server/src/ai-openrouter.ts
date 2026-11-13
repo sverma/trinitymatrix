@@ -210,6 +210,31 @@ function modelReasoningOptions(modelId: string) {
   return undefined;
 }
 
+/**
+ * v3 must plan its own cards. Keep historical v1/v2 inference settings above pinned.
+ * OpenRouter reasoning consumes the same 1600-token output budget; exclude hides
+ * traces, not computation. Exact capabilities checked against /api/v1/models on
+ * 2026-11-13; https://openrouter.ai/docs/guides/best-practices/reasoning-tokens.
+ */
+function validationModelReasoningOptions(modelId: string) {
+  if (["openai/gpt-6.1-terra", "openai/gpt-5.4-mini", "openai/gpt-6-luna",
+    "anthropic/claude-haiku-5.5", "deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v3.2",
+    "deepseek/deepseek-v4.1-flash-1017", "google/gemini-3.8-flash"].includes(modelId)) {
+    return { effort: "low", exclude: true };
+  }
+  // These exact models expose a token budget. Leave 1088 tokens for final JSON.
+  if (["qwen/qwen3.8-flash", "nvidia/nemotron-3-ultra-550b-a55b"].includes(modelId)) {
+    return { max_tokens: 512, exclude: true };
+  }
+  // Binary thinking models have no lower supported effort/budget control.
+  // The request-wide token/time bounds still apply to all internal planning.
+  if (["xiaomi/mimo-v2.6-flash", "z-ai/glm-5", "mistralai/mistral-large-4-0"].includes(modelId)) {
+    return { enabled: true, exclude: true };
+  }
+  // Non-reasoning and unknown bindings receive no speculative provider options.
+  return undefined;
+}
+
 function nonnegativeNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
@@ -331,7 +356,7 @@ export class OpenRouterAgentClient {
     const rulesFacts = v2 ? validatedRulesFacts(input.rulesFacts, observation) : undefined;
     const mustDeclare = rulesFacts?.status === "complete" && !!rulesFacts.immediateDeclaration;
     const timeoutMs = Math.min(input.timeoutMs ?? this.timeoutMs, this.timeoutMs);
-    const reasoning = modelReasoningOptions(input.modelId);
+    const reasoning = v3 ? validationModelReasoningOptions(input.modelId) : modelReasoningOptions(input.modelId);
     const body = JSON.stringify({
       model: input.modelId,
       messages: [
