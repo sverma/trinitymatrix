@@ -1,5 +1,6 @@
 import { expect, test, type Browser, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
 import type { BroadcastFrame, LiveBroadcastSummary } from "@trinitymatrix/protocol";
+import { join } from "node:path";
 
 test.skip(process.env.TRINITY_E2E_BROADCASTS !== "true", "Requires the real local broadcast app, PostgreSQL, Redis and private media worker.");
 
@@ -62,7 +63,10 @@ async function noOverflow(page: Page) {
 
 async function screenshot(page: Page, info: TestInfo, name: string) {
   await noOverflow(page);
-  await info.attach(name, { body: await page.screenshot({ fullPage: true, animations: "disabled" }), contentType: "image/png" });
+  const output = process.env.TRINITY_E2E_SCREENSHOT_DIR;
+  const path = output ? join(output, `${name}.png`) : info.outputPath(`${name}.png`);
+  await page.screenshot({ path, fullPage: true, animations: "disabled" });
+  await info.attach(name, { path, contentType: "image/png" });
 }
 
 /** Only substitutes the browser's permission source. Recording, encoding and uploads stay real. */

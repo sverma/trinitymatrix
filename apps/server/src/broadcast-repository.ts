@@ -234,14 +234,17 @@ export class PostgresBroadcastRepository implements BroadcastRepository {
         );
         if (Number(count.rows[0]?.count ?? 5) >= 5) throw new BroadcastConflictError("Please wait before sending another comment.");
         row = (await client.query<CommentRow>(
-          `WITH stamp AS (SELECT date_trunc('milliseconds',clock_timestamp())+interval '1 millisecond' AS t)
+          `WITH stamp AS (SELECT date_trunc('milliseconds',clock_timestamp())
+             + CASE WHEN $6::integer > 0 THEN interval '1 millisecond' ELSE interval '0 milliseconds' END AS t)
            INSERT INTO live_broadcast_comments(id,broadcast_id,author_user_id,client_message_id,message,created_at,released_at)
            SELECT $1,$2,$3,$4,$5,t,t+($6::integer*interval '1 millisecond') FROM stamp RETURNING *, $7::text AS display_name`,
           [randomUUID(), allowed.id, userId, valid.clientMessageId, valid.message, allowed.participant ? BROADCAST_DELAY_MS : 0, allowed.display_name]
         )).rows[0]!;
       }
       await client.query("COMMIT");
-      const delayed = row.released_at.getTime() > Date.now();
+      // Spectator posts have no spoiler delay. Return their stored comment even
+      // when the application clock trails PostgreSQL by a few milliseconds.
+      const delayed = allowed.participant && row.released_at.getTime() > Date.now();
       return { availableAt: row.released_at.getTime(), delayed, ...(!delayed ? { comment: comment(row) } : {}) };
     } catch (error) { await client.query("ROLLBACK"); throw error; }
     finally { client.release(); }

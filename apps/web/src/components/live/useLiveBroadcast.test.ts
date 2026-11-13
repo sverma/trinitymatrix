@@ -100,6 +100,33 @@ describe("spectator-only broadcast connection", () => {
     await waitFor(() => expect(result.current.timeline.map(({ sequence }) => sequence)).toEqual([1, 2, 3, 4, 5]));
   });
 
+  it("bounds service recovery attempts and permits an explicit retry", async () => {
+    vi.useFakeTimers(); const auth = vi.fn();
+    const { result } = renderHook(() => useLiveBroadcast(liveName, auth));
+    await act(async () => undefined);
+    vi.mocked(api.liveBroadcast).mockRejectedValue(new HttpApiError("Service unavailable.", 503));
+    act(() => FakeEventSource.instances[0]!.emit("closed", { code: "unavailable", reason: "The broadcast service is temporarily unavailable." }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+    expect(api.liveBroadcast).toHaveBeenCalledTimes(9);
+    expect(result.current.error).toContain("Automatic retries paused");
+    vi.mocked(api.liveBroadcast).mockResolvedValue(liveDetail(liveFrame(6)));
+    await act(async () => result.current.refresh());
+    expect(result.current.frame?.sequence).toBe(6);
+    expect(FakeEventSource.instances).toHaveLength(2);
+  });
+
+  it("keeps only the server's100-message released window in a long spectator session", async () => {
+    const auth = vi.fn(); const { result } = renderHook(() => useLiveBroadcast(liveName, auth));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => {
+      for (let index = 0; index < 101; index++) {
+        FakeEventSource.instances[0]!.emit("comment", { comment: { ...liveComment(`Message ${index}`), id: `${(index + 1).toString(16).padStart(8, "0")}-4444-4444-8444-444444444444`, createdAt: 1_800_000_000_000 + index } });
+      }
+    });
+    expect(result.current.comments).toHaveLength(100);
+    expect(result.current.comments[0]?.message).toBe("Message 1");
+  });
+
   it("ignores an earlier-moves response after changing to another broadcast", async () => {
     let finish!: (value: { frames: ReturnType<typeof liveFrame>[]; nextCursor: string | null }) => void;
     vi.mocked(api.broadcastTimeline).mockResolvedValueOnce({ frames: [liveFrame(2)], nextCursor: "2" })

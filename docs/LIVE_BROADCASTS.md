@@ -74,8 +74,8 @@ history, directory and event-stream routes apply the same release rules.
 
 Broadcast chat is readable text in PostgreSQL, separate from encrypted
 post-game chat. Messages are bounded to 280 characters and five per account per
-minute, across broadcasts. UUID request IDs make retries idempotent. Authors,
-participants and authorized administrators have appropriate deletion controls;
+minute, across broadcasts. UUID request IDs make retries idempotent. Participants
+and authorized administrators have deletion controls;
 signed-in spectators can report messages. The admin portal's Broadcasts section
 lists reports and supports resolution and removal. Removed messages become
 tombstones for connected viewers.

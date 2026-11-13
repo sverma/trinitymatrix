@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Pool } from "pg";
 import Fastify from "fastify";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runMigrations } from "./db/migrate";
 import { RankingGame, type RankingGameSnapshot } from "./game";
 import { BroadcastConflictError, PostgresBroadcastRepository } from "./broadcast-repository";
@@ -143,6 +143,25 @@ describe.skipIf(!databaseUrl)("delayed broadcasts in isolated PostgreSQL", () =>
     expect(await repository.access(name, spectator)).toBeNull();
     expect((await repository.detail(name))?.comments.find((comment) => comment.id === id)).toBeUndefined();
     await expect(repository.addComment(name, spectator, { message: "No access", clientMessageId: randomUUID() })).rejects.toBeInstanceOf(BroadcastConflictError);
+  });
+
+  it("returns spectator comments immediately despite application clock skew and allows reporting at once", async () => {
+    const { name, ids } = await game(); const spectator = await user(); const clientMessageId = randomUUID();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - 1_000);
+    let posted: Awaited<ReturnType<PostgresBroadcastRepository["addComment"]>>;
+    try {
+      posted = await repository.addComment(name, spectator, { message: "Immediate spectator comment", clientMessageId });
+      expect(posted.delayed).toBe(false);
+      expect(posted.comment).toMatchObject({ playerId: spectator, message: "Immediate spectator comment" });
+      const replay = await repository.addComment(name, spectator, { message: "Do not replace original", clientMessageId });
+      expect(replay).toEqual(posted);
+    } finally { clock.mockRestore(); }
+    expect(await repository.reportComment(name, posted!.comment!.id, ids[0]!, "Please review")).toBe(true);
+    expect((await repository.detail(name))?.comments).toContainEqual(posted!.comment!);
+    const release = (await pool.query<{ immediate: boolean; released: boolean }>(
+      "SELECT released_at=created_at AS immediate,released_at<=clock_timestamp() AS released FROM live_broadcast_comments WHERE id=$1", [posted!.comment!.id]
+    )).rows[0]!;
+    expect(release).toEqual({ immediate: true, released: true });
   });
 
   it("paginates a composition-filtered directory and enforces the single active video publisher", async () => {
