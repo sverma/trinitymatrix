@@ -38,17 +38,26 @@ export function LiveVideo({ gameName }: { gameName: string }) {
     const begin = async () => {
       try {
         const source = sameOriginMediaPath(playlist);
-        if (element.canPlayType("application/vnd.apple.mpegurl")) { element.src = source; await element.play().catch(() => undefined); return; }
+        const nativeHls = Boolean(element.canPlayType("application/vnd.apple.mpegurl"));
+        const playNative = async () => { element.src = source; await element.play().catch(() => undefined); };
+        if (nativeHls && typeof window.MediaSource === "undefined" && !("ManagedMediaSource" in window)) { await playNative(); return; }
         const { default: Hls } = await import("hls.js");
         if (!active) return;
-        if (!Hls.isSupported()) throw new Error("Video playback is not supported in this browser.");
+        if (!Hls.isSupported()) {
+          if (nativeHls) { await playNative(); return; }
+          throw new Error("Video playback is not supported in this browser.");
+        }
         const hls = new Hls({ enableWorker: false, maxBufferLength: 30, backBufferLength: 60, xhrSetup: (xhr, url) => {
           if (new URL(url, window.location.origin).origin !== window.location.origin) throw new Error("External media addresses are not allowed.");
           xhr.withCredentials = true;
         } });
         destroy = () => hls.destroy(); hls.loadSource(source); hls.attachMedia(element);
         hls.on(Hls.Events.MANIFEST_PARSED, () => { void element.play().catch(() => undefined); });
-        hls.on(Hls.Events.ERROR, (_event, data) => { if (active && data.fatal) { setPlaybackError("Video playback was interrupted. Retry to reconnect."); hls.destroy(); } });
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (!active) return;
+          element.dispatchEvent(new CustomEvent("trinity:video-error", { bubbles: true, detail: { type: data.type, details: data.details, fatal: data.fatal } }));
+          if (data.fatal) { setPlaybackError("Video playback was interrupted. Retry to reconnect."); hls.destroy(); }
+        });
       } catch (cause) { if (active) setPlaybackError(cause instanceof Error ? cause.message : "Video playback could not start."); }
     };
     void begin();

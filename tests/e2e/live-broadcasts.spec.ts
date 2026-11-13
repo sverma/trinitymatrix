@@ -15,6 +15,7 @@ async function collectPlaybackDiagnostics(page: Page, label: string, diagnostics
   page.on("console", (message) => { if (["error", "warning"].includes(message.type())) add(message.type(), message.text()); });
   page.on("pageerror", (error) => add("pageerror", error.message));
   await page.addInitScript(() => {
+    document.addEventListener("trinity:video-error", (event) => { console.warn("HLS broadcast video state", JSON.stringify((event as CustomEvent).detail)); });
     document.addEventListener("error", (event) => {
       if (!(event.target instanceof HTMLVideoElement)) return;
       const video = event.target;
