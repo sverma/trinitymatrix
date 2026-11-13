@@ -27,14 +27,16 @@ type HandLayout = {
   gameId: string;
   groups: string[][];
   showCardId: string | null;
+  arranged: boolean;
 };
 
 type MeldStatus = {
-  kind: "incomplete" | "invalid" | "trinity" | "meld";
+  kind: "unarranged" | "incomplete" | "invalid" | "trinity" | "meld";
   label: string;
 };
 
-function getMeldStatus(cards: readonly Card[], wildRank: number): MeldStatus {
+function getMeldStatus(cards: readonly Card[], wildRank: number, unarranged = false): MeldStatus {
+  if (unarranged) return { kind: "unarranged", label: "Not grouped yet" };
   if (cards.length < 3) return { kind: "incomplete", label: "Incomplete · need 3+" };
 
   const result = validateMeld(cards, wildRank);
@@ -73,7 +75,7 @@ function reconcileLayout(layout: HandLayout, hand: readonly Card[]): HandLayout 
     if (groups.length === 0) groups.push(added);
     else groups[groups.length - 1]!.push(...added);
   }
-  return { gameId: layout.gameId, groups, showCardId };
+  return { gameId: layout.gameId, groups, showCardId, arranged: layout.arranged };
 }
 
 function groupsForSubmission(layout: HandLayout, hand: readonly Card[]): string[][] {
@@ -95,16 +97,19 @@ function groupsForSubmission(layout: HandLayout, hand: readonly Card[]): string[
 }
 
 function loadLayout(gameId: string, playerId: string, hand: readonly Card[]): HandLayout {
-  const fallback = { gameId, groups: [hand.map(({ id }) => id)], showCardId: null };
+  const fallback = { gameId, groups: [hand.map(({ id }) => id)], showCardId: null, arranged: false };
   try {
     const saved = window.sessionStorage.getItem(layoutStorageKey(gameId, playerId));
     if (!saved) return fallback;
     const value = JSON.parse(saved) as Partial<HandLayout>;
     if (!Array.isArray(value.groups)) return fallback;
+    const groups = value.groups.filter(Array.isArray).map((group) => group.filter((id): id is string => typeof id === "string"));
+    const showCardId = typeof value.showCardId === "string" ? value.showCardId : null;
     return reconcileLayout({
       gameId,
-      groups: value.groups.filter(Array.isArray).map((group) => group.filter((id): id is string => typeof id === "string")),
-      showCardId: typeof value.showCardId === "string" ? value.showCardId : null
+      groups,
+      showCardId,
+      arranged: typeof value.arranged === "boolean" ? value.arranged : groups.length > 1
     }, hand);
   } catch {
     return fallback;
@@ -377,9 +382,13 @@ export function GameTable({
     return () => window.clearInterval(timer);
   }, [countdownEndsAt]);
 
-  const updateGroups = (updater: (groups: string[][]) => string[][]) => {
+  const updateGroups = (updater: (groups: string[][]) => string[][], markArranged = false) => {
     setLayout((current) => current.gameId === game.gameId
-      ? { ...current, groups: updater(current.groups).filter((group) => group.length > 0) }
+      ? {
+          ...current,
+          groups: updater(current.groups).filter((group) => group.length > 0),
+          arranged: current.arranged || markArranged
+        }
       : current);
   };
 
@@ -393,7 +402,7 @@ export function GameTable({
     if (selectedIds.length === 0) return;
     const selectedSet = new Set(selectedIds);
     const ordered = currentLayout.groups.flat().filter((id) => selectedSet.has(id));
-    updateGroups((groups) => [...groups.map((group) => group.filter((id) => !selectedSet.has(id))), ordered]);
+    updateGroups((groups) => [...groups.map((group) => group.filter((id) => !selectedSet.has(id))), ordered], true);
     setSelected(new Set());
   };
 
@@ -402,7 +411,7 @@ export function GameTable({
     const groups = suitOrder.map((suit) => cardOrder
       .filter((card) => suit === "joker" ? card.printedJoker : !card.printedJoker && card.suit === suit)
       .map(({ id }) => id)).filter((group) => group.length > 0);
-    updateGroups(() => groups);
+    updateGroups(() => groups, true);
     setSelected(new Set());
   };
 
@@ -569,7 +578,7 @@ export function GameTable({
             <img className="card-back" src="/assets/trinity-card-back.png" alt="" />
             <span>Closed deck<small>{game.stockCount} cards</small></span>
           </button>
-          <div className="wild-card" aria-label={`${rankLabel(game.wildRank)} is the wild joker`}><span>Joker</span><strong>{rankLabel(game.wildRank)}</strong></div>
+          <div className="wild-card" aria-label={`${rankLabel(game.wildRank)} is the wild rank. Cards of this rank act as wild cards; printed jokers are separate wild cards.`}><span>Wild rank</span><strong>{rankLabel(game.wildRank)}</strong></div>
         </div>
         <button className="deck-button discard-pile" aria-label={`Open deck${game.topDiscard ? `, ${cardLabel(game.topDiscard)}` : ", empty"}`} disabled={game.phase !== "playing" || !isMyTurn || hasDrawn || !game.topDiscard || Boolean(winner) || showToss} onClick={() => onDraw("discard", groupsForSubmission(currentLayout, hand))}>
           {game.topDiscard ? <img src={cardAsset(game.topDiscard)} alt="" /> : <span className="empty-card" aria-hidden="true" />}
@@ -614,12 +623,15 @@ export function GameTable({
         {currentLayout.groups.map((group, groupIndex) => {
           const anchorId = group[0];
           const groupCards = group.map((id) => byId.get(id)).filter((card): card is Card => Boolean(card));
-          const meldStatus = getMeldStatus(groupCards, game.wildRank);
+          const unarranged = !currentLayout.arranged && currentLayout.groups.length === 1;
+          const meldStatus = getMeldStatus(groupCards, game.wildRank, unarranged);
           return <section
             className={`hand-group meld-${meldStatus.kind}`}
             key={`${groupIndex}-${anchorId ?? "empty"}`}
             role="group"
-            aria-label={`Group ${groupIndex + 1}, ${group.length} cards: ${meldStatus.label}`}
+            aria-label={unarranged
+              ? `Ungrouped hand, ${group.length} cards: ${meldStatus.label}`
+              : `Group ${groupIndex + 1}, ${group.length} cards: ${meldStatus.label}`}
             onDragOver={(event) => event.preventDefault()}
             onDrop={(event) => {
               event.preventDefault();
@@ -628,7 +640,7 @@ export function GameTable({
           >
             <span className="meld-status" aria-hidden="true">{meldStatus.label}</span>
             <div className="group-label">
-              <span>Group {groupIndex + 1}</span>
+              <span>{unarranged ? "Ungrouped cards" : `Group ${groupIndex + 1}`}</span>
               {groupIndex > 0 && <button type="button" disabled={handControlsDisabled} onClick={() => updateGroups((groups) => groups.map((item, index) => index === groupIndex - 1 ? [...item, ...groups[groupIndex]!] : item).filter((_, index) => index !== groupIndex))}>Merge left</button>}
             </div>
             <div className="card-fan">

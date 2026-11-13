@@ -88,7 +88,7 @@ async function verifyMeldStatusIsNotColorOnly(page: Page) {
   await expect(statuses.first()).toBeVisible();
   const labels = (await statuses.allTextContents()).map((label) => label.trim());
   expect(labels.length).toBeGreaterThan(0);
-  expect(labels.every((label) => /^(Incomplete · need 3\+|Invalid meld|Trinity · 21|Valid · (3|6|9|12|15|18|24|27))$/.test(label)),
+  expect(labels.every((label) => /^(Not grouped yet|Incomplete · need 3\+|Invalid meld|Trinity · 21|Valid · (3|6|9|12|15|18|24|27))$/.test(label)),
     "every colored meld marker must also carry an explicit visible status label").toBe(true);
 }
 

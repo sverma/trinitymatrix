@@ -147,6 +147,36 @@ describe("GameTable", () => {
     expect(spades[1]).toHaveAccessibleName(/3 of spades/i);
   });
 
+  it("keeps a freshly dealt, ungrouped hand neutral until the player creates groups", async () => {
+    const user = userEvent.setup();
+    const hand = Array.from({ length: 13 }, (_, index) => card(
+      `fresh-${index}`,
+      (["clubs", "diamonds", "hearts", "spades"] as const)[index % 4]!,
+      (index % 13) + 1
+    ));
+    const { container } = render(<GameTable {...actions} game={game(13)} hand={hand} playerId="p1" notice="Match found. Cards have been dealt." winner={null} />);
+
+    expect(screen.getByRole("group", { name: "Ungrouped hand, 13 cards: Not grouped yet" })).toBeInTheDocument();
+    expect(screen.queryByText("Invalid meld")).not.toBeInTheDocument();
+    expect(container.querySelector(".hand-group")).toHaveClass("meld-unarranged");
+
+    const cards = screen.getAllByRole("button", { name: /rearrange/i });
+    await user.click(cards[0]!);
+    await user.click(cards[1]!);
+    await user.click(screen.getByRole("button", { name: "Group selected" }));
+
+    expect(screen.getByRole("group", { name: /Group 1, 11 cards: Invalid meld/i })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: /Group 2, 2 cards: Incomplete/i })).toBeInTheDocument();
+  });
+
+  it("labels the rank marker as a wild rank rather than a printed joker", () => {
+    render(<GameTable {...actions} game={game(13)} hand={[]} playerId="p1" notice="Connected." winner={null} />);
+
+    expect(screen.getByText("Wild rank")).toBeInTheDocument();
+    expect(screen.getByLabelText("8 is the wild rank. Cards of this rank act as wild cards; printed jokers are separate wild cards.")).toBeInTheDocument();
+    expect(screen.queryByText("Joker")).not.toBeInTheDocument();
+  });
+
   it("labels groups from live meld validation instead of alternating decorative colors", () => {
     const hand = [
       card("heart-3", "hearts", 3),
