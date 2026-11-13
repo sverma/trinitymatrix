@@ -20,6 +20,9 @@ export type AiQualificationReport = {
   draws: number;
   discards: number;
   declarations: number;
+  validDeclarations: number;
+  invalidDeclarations: number;
+  terminalFixtures: number;
   invalidActions: number;
   retries: number;
   providerErrors: number;
@@ -86,6 +89,7 @@ export async function qualifyAiModel(options: {
   const report: AiQualificationReport = {
     modelId: identity.modelId, status: identity.enabled ? "passed" : "disabled", turnsRequested: turns,
     turnsCompleted: 0, turnsMissed: 0, requests: 0, draws: 0, discards: 0, declarations: 0,
+    validDeclarations: 0, invalidDeclarations: 0, terminalFixtures: 0,
     invalidActions: 0, retries: 0, providerErrors: 0, forcedDrops: 0, errors: {}, httpStatuses: {}, finishReasons: {},
     maxLatencyMs: 0, maxTurnDurationMs: 0, knownCostUsd: 0, unknownCostRequests: 0
   };
@@ -180,8 +184,13 @@ export async function qualifyAiModel(options: {
       }
       if (result.decision.action === "declare") report.declarations += 1;
       if (applied.dropped) {
-        report.invalidActions += 1; report.forcedDrops += 1;
-        record("invalid-declaration"); report.status = "failed"; break;
+        // The model chose a committed declaration and lost under ordinary rules.
+        // Record the strategic loss rather than misclassifying it as a worker failure.
+        report.invalidActions += 1;
+        report.invalidDeclarations += 1;
+        turnComplete = true;
+      } else if (result.decision.action === "declare") {
+        report.validDeclarations += 1;
       }
       memory = result.decision.memory;
       const action = result.decision.action;
@@ -196,10 +205,11 @@ export async function qualifyAiModel(options: {
     report.maxTurnDurationMs = Math.max(report.maxTurnDurationMs, Date.now() - turnStarted);
     if (!turnComplete) { report.turnsMissed += 1; break; }
     report.turnsCompleted += 1;
-    if (report.turnsCompleted >= turns) break;
     try { advanceSyntheticHuman(game, syntheticHumanId); }
     catch { record("fixture-opponent-failed"); report.status = "failed"; break; }
     if (game.publicState().phase === "finished") {
+      report.terminalFixtures += 1;
+      if (report.turnsCompleted >= turns) break;
       syntheticHumanId = randomUUID();
       game = createGame(identity, syntheticHumanId);
       memory = ""; publicHistory = []; feedback = "";

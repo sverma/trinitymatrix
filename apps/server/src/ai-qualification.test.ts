@@ -147,15 +147,42 @@ describe("operator full-turn model qualification", () => {
       errors: { "command-draw_required": 2, "attempts-exhausted": 1 } });
   });
 
-  it("treats an invalid committed declaration as the ordinary rules-engine drop", async () => {
+  it("records a model-chosen invalid declaration as a completed terminal rule loss", async () => {
     const { ledger, decide, createClient } = setup();
     decide.mockImplementation(async (input) => input.observation.hand.length === 13 ? selected(input) : selected(input, {
       action: "declare", cardId: input.observation.hand.at(-1)!.id,
       groups: [input.observation.hand.slice(0, -1).map(({ id }) => id)]
     }));
-    const report = await qualifyAiModel({ identity, ledger, createClient, dailyBudgetUsd: 10, turns: 1 });
-    expect(report).toMatchObject({ status: "failed", turnsCompleted: 0, declarations: 1,
-      invalidActions: 1, forcedDrops: 1, errors: { "invalid-declaration": 1 } });
+    let game: RankingGame | undefined;
+    const createGame = (who: AiIdentity, humanId: string) => {
+      const seeded = new RankingGame([{ id: who.id, displayName: who.displayName }, { id: humanId, displayName: "Synthetic human" }], () => 0);
+      const snapshot = seeded.snapshot();
+      snapshot.currentPlayerIndex = snapshot.seats.findIndex(({ id }) => id === who.id);
+      game = RankingGame.restore(snapshot);
+      return game;
+    };
+    const report = await qualifyAiModel({ identity, ledger, createClient, createGame, dailyBudgetUsd: 10, turns: 1 });
+    expect(report).toMatchObject({ status: "passed", turnsCompleted: 1, turnsMissed: 0, declarations: 1,
+      validDeclarations: 0, invalidDeclarations: 1, terminalFixtures: 1,
+      invalidActions: 1, forcedDrops: 0, providerErrors: 0, errors: {} });
+    expect(game!.publicState().phase).toBe("finished");
+    expect(game!.publicState().players.find(({ id }) => id === identity.id)?.status).toBe("dropped");
+    expect(game!.publicState().players.find(({ id }) => id !== identity.id)?.status).toBe("playing");
+  });
+
+  it("continues all ten qualifications in fresh fixtures after visible invalid declaration losses", async () => {
+    const { ledger, decide, createClient } = setup();
+    decide.mockImplementation(async (input) => input.observation.hand.length === 13 ? selected(input) : selected(input, {
+      action: "declare", cardId: input.observation.hand.at(-1)!.id,
+      groups: [input.observation.hand.slice(0, -1).map(({ id }) => id)]
+    }));
+    const report = await qualifyAiModel({ identity, ledger, createClient, dailyBudgetUsd: 10 });
+    expect(report).toMatchObject({ status: "passed", turnsRequested: 10, turnsCompleted: 10, turnsMissed: 0,
+      draws: 10, discards: 0, declarations: 10, validDeclarations: 0, invalidDeclarations: 10,
+      terminalFixtures: 10, invalidActions: 10, forcedDrops: 0, retries: 0, providerErrors: 0, requests: 20, errors: {} });
+    expect(decide.mock.calls.filter(([input]) => input.observation.hand.length === 13).every(([input]) => input.memory === "")).toBe(true);
+    expect(new Set(decide.mock.calls.map(([input]) => input.observation.state.gameId)).size).toBe(10);
+    expect(ledger.saveMemory).not.toHaveBeenCalled();
   });
 
   it("completes valid declarations using synthetic final submissions and fresh fixtures for later turns", async () => {
@@ -181,7 +208,8 @@ describe("operator full-turn model qualification", () => {
       action: "declare", cardId: "final-discard", groups: groups.map((group) => group.map(({ id }) => id))
     }));
     const report = await qualifyAiModel({ identity, ledger, createClient, createGame, dailyBudgetUsd: 10, turns: 2 });
-    expect(report).toMatchObject({ status: "passed", turnsCompleted: 2, draws: 2, declarations: 2, forcedDrops: 0, requests: 4 });
+    expect(report).toMatchObject({ status: "passed", turnsCompleted: 2, draws: 2, declarations: 2,
+      validDeclarations: 2, invalidDeclarations: 0, terminalFixtures: 2, forcedDrops: 0, requests: 4 });
     expect(createGame).toHaveBeenCalledTimes(2);
     expect(decide.mock.calls[2]![0].memory).toBe("");
   });

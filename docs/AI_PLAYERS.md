@@ -71,8 +71,8 @@ five minutes. Only structured-output models within the configured price caps
 are admitted, and there is no fallback to another model.
 
 Requests prefer the lowest-latency eligible endpoint for the selected model.
-Qwen reasoning is limited to 256 tokens. The selected DeepSeek and Mistral
-models default to ordinary responses without extended reasoning. All retain
+Qwen reasoning is limited to 256 tokens. Haiku and DeepSeek optional extended
+reasoning is explicitly disabled; Mistral defaults to ordinary responses. All retain
 the same 1,600-token total output ceiling. Gemini uses its supported low
 reasoning effort. These settings
 avoid provider defaults consuming the turn deadline before returning a move;
@@ -149,6 +149,10 @@ node dist/ops/ai-check.js --turns 10 MODEL_ID
 It uses disposable in-memory games and fixture-local notes, and charges every
 real request to the same shared ledger without creating ranked matches. The
 report includes complete/missed turns, retries, error codes, timing and costs.
+Invalid declarations are recorded separately as normal rule losses, and
+qualification continues with a fresh disposable fixture. They never count as
+technical forced drops. The operator-only `--diagnose-schema` flag emits only
+allowlisted schema/error hints; provider text and credentials are never printed.
 
 Run isolated database checks with:
 
