@@ -39,15 +39,23 @@ describe("bounded AI rules worker service", () => {
     } finally { clearInterval(timer); await service.stop(); }
   });
 
-  it("bounds pending jobs at8 and cancels every active/queued promise during shutdown", async () => {
+  it("bounds pending jobs at sixteen and cancels every active/queued promise during shutdown", async () => {
     let created = 0;
     const service = new AiRuleToolService({ workerFactory: () => { created++; return stuckWorker(); } });
-    const work = Array.from({ length: 9 }, () => service.compute(input, 3_000));
+    const work = Array.from({ length: 17 }, () => service.compute(input, 3_000));
     expect(await service.compute(input, 3_000)).toMatchObject({ status: "unavailable", reason: "tool-error" });
     await service.stop();
     expect((await Promise.all(work)).every(({ status }) => status === "unavailable")).toBe(true);
     expect((await service.compute(input)).status).toBe("unavailable");
     expect(created).toBe(1);
+  });
+
+  it("checks a simultaneous turn from every configured model within the normal deadline", async () => {
+    const service = new AiRuleToolService({ workerFactory: sourceWorker });
+    try {
+      const facts = await Promise.all(Array.from({ length: 14 }, () => service.compute(input)));
+      expect(facts.every(({ status }) => status === "complete")).toBe(true);
+    } finally { await service.stop(); }
   });
 
   it("includes waiting time in each job's deadline", async () => {

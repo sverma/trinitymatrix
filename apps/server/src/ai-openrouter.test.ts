@@ -120,6 +120,12 @@ describe("legacy model-bound OpenRouter player", () => {
 
   it.each([
     { id: "openai/gpt-6-luna", reasoning: { enabled: false, exclude: true } },
+    { id: "openai/gpt-6.1-terra", reasoning: { enabled: false, exclude: true } },
+    { id: "cohere/command-a-plus", reasoning: { enabled: false, exclude: true } },
+    { id: "nvidia/nemotron-3.5-lightning", reasoning: { enabled: false, exclude: true } },
+    { id: "xiaomi/mimo-v2.6-flash", reasoning: { enabled: false, exclude: true } },
+    { id: "minimax/minimax-m3", reasoning: { enabled: false, exclude: true } },
+    { id: "z-ai/glm-5.3-flash", reasoning: { effort: "low", exclude: true } },
     { id: "openai/gpt-6-luna-preview", reasoning: undefined },
     { id: "deepseek/deepseek-v4.1-flash", reasoning: { enabled: false, exclude: true } },
     { id: "meta-llama/llama-4-maverick", reasoning: undefined },

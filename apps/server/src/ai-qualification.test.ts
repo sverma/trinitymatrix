@@ -48,6 +48,18 @@ function setup(decide = vi.fn(async (input: Input) => selected(input))) {
 describe("operator full-turn model qualification", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("exercises an ordinary v2 draw and discard independently of the winning-hand fixture", async () => {
+    const { ledger, createClient } = setup();
+    const facts: AiGameRulesFacts[] = [];
+    const report = await qualifyAiModel({ identity: { ...identity, protocolId: AI_GAME_PROTOCOL_IDENTITY_VERSION },
+      ledger, createClient, dailyBudgetUsd: 10, turns: 1,
+      rulesTools: { compute: async (input) => { const checked = checkAiRules(input); facts.push(checked); return checked; } } });
+    expect(report).toMatchObject({ status: "passed", draws: 1, discards: 1, declarations: 0, requests: 2, winningDecisionsAvailable: 0 });
+    expect(facts).toHaveLength(2);
+    expect(facts.every((checked) => checked.status === "complete" && checked.immediateDeclaration === null)).toBe(true);
+    expect(facts[0]!.readyHand).toBeNull();
+  });
+
   it("requires ten complete model-chosen draw/discard cycles and never writes live profile memory", async () => {
     const { ledger, decide, createClient, cancelAll } = setup();
     const report = await qualifyAiModel({ identity, ledger, createClient, dailyBudgetUsd: 10 });
