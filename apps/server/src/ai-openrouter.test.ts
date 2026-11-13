@@ -676,18 +676,18 @@ describe("v2 model-controlled winning protocol", () => {
 describe("v3 validation-only model play", () => {
   it.each([
     { id: "openai/gpt-6.1-terra", old: { enabled: false, exclude: true }, current: { effort: "low", exclude: true } },
-    { id: "openai/gpt-5.4-mini", old: { enabled: false, exclude: true }, current: { effort: "low", exclude: true } },
-    { id: "openai/gpt-6-luna", old: { enabled: false, exclude: true }, current: { effort: "low", exclude: true } },
-    { id: "anthropic/claude-haiku-5.5", old: { enabled: false, exclude: true }, current: { effort: "low", exclude: true } },
-    { id: "deepseek/deepseek-v4.1-flash", old: { enabled: false, exclude: true }, current: { effort: "low", exclude: true } },
-    { id: "deepseek/deepseek-v3.2", old: { enabled: false, exclude: true }, current: { effort: "low", exclude: true } },
+    { id: "openai/gpt-5.4-mini", old: { enabled: false, exclude: true }, current: { enabled: false, exclude: true } },
+    { id: "openai/gpt-6-luna", old: { enabled: false, exclude: true }, current: { enabled: false, exclude: true } },
+    { id: "anthropic/claude-haiku-5.5", old: { enabled: false, exclude: true }, current: { enabled: false, exclude: true } },
+    { id: "deepseek/deepseek-v4.1-flash", old: { enabled: false, exclude: true }, current: { enabled: false, exclude: true } },
+    { id: "deepseek/deepseek-v3.2", old: { enabled: false, exclude: true }, current: { enabled: false, exclude: true } },
     { id: "deepseek/deepseek-v4.1-flash-1017", old: { effort: "low", exclude: true }, current: { effort: "low", exclude: true } },
     { id: "google/gemini-3.8-flash", old: { effort: "low", exclude: true }, current: { effort: "low", exclude: true } },
     { id: "qwen/qwen3.8-flash", old: { max_tokens: 256, exclude: true }, current: { max_tokens: 512, exclude: true } },
     { id: "nvidia/nemotron-3-ultra-550b-a55b", old: { enabled: false, exclude: true }, current: { max_tokens: 512, exclude: true } },
-    { id: "xiaomi/mimo-v2.6-flash", old: { enabled: false, exclude: true }, current: { enabled: true, exclude: true } },
-    { id: "z-ai/glm-5", old: { enabled: false, exclude: true }, current: { enabled: true, exclude: true } },
-    { id: "mistralai/mistral-large-4-0", old: { enabled: false, exclude: true }, current: { enabled: true, exclude: true } },
+    { id: "xiaomi/mimo-v2.6-flash", old: { enabled: false, exclude: true }, current: { enabled: false, exclude: true } },
+    { id: "z-ai/glm-5", old: { enabled: false, exclude: true }, current: { enabled: false, exclude: true } },
+    { id: "mistralai/mistral-large-4-0", old: { enabled: false, exclude: true }, current: { enabled: false, exclude: true } },
     { id: "meta-llama/llama-4-maverick", old: undefined, current: undefined },
     { id: "qwen/unverified-model", old: undefined, current: undefined }
   ])("allows bounded v3 planning for $id while preserving exact v2 inference settings", async ({ id, old, current }) => {

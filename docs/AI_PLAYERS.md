@@ -156,6 +156,13 @@ search or readiness facts. A legal discard is not rejected because another move
 could win. V2 recovery retains its original bounded own-hand rules tool and
 mandatory-declare policy; unavailable v2 facts mean unknown.
 
+V3 permits bounded internal model reasoning for the exact Terra and Gemini
+bindings (low effort), and Qwen and Nemotron (512 reasoning tokens). These tokens
+share the existing 1,600-token output cap and 20-second request deadline; private
+reasoning traces are excluded. Other bindings retain their established inference
+settings after provider trials found truncation or deadline failures with added
+reasoning. Operator availability remains independent of this configuration.
+
 A transient provider/format error or invalid v3 proposal gets one correction
 retry using the same model and a new budget reservation. V3 correction feedback
 is bounded to the validation code and safe reason; it supplies no winning plan. Each call is capped by the remaining normal turn

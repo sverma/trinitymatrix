@@ -217,22 +217,17 @@ function modelReasoningOptions(modelId: string) {
  * 2026-11-13; https://openrouter.ai/docs/guides/best-practices/reasoning-tokens.
  */
 function validationModelReasoningOptions(modelId: string) {
-  if (["openai/gpt-6.1-terra", "openai/gpt-5.4-mini", "openai/gpt-6-luna",
-    "anthropic/claude-haiku-5.5", "deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v3.2",
-    "deepseek/deepseek-v4.1-flash-1017", "google/gemini-3.8-flash"].includes(modelId)) {
+  if (["openai/gpt-6.1-terra", "google/gemini-3.8-flash"].includes(modelId)) {
     return { effort: "low", exclude: true };
   }
   // These exact models expose a token budget. Leave 1088 tokens for final JSON.
   if (["qwen/qwen3.8-flash", "nvidia/nemotron-3-ultra-550b-a55b"].includes(modelId)) {
     return { max_tokens: 512, exclude: true };
   }
-  // Binary thinking models have no lower supported effort/budget control.
-  // The request-wide token/time bounds still apply to all internal planning.
-  if (["xiaomi/mimo-v2.6-flash", "z-ai/glm-5", "mistralai/mistral-large-4-0"].includes(modelId)) {
-    return { enabled: true, exclude: true };
-  }
-  // Non-reasoning and unknown bindings receive no speculative provider options.
-  return undefined;
+  // Bounded live qualification found more truncations/timeouts with reasoning
+  // for Haiku, DeepSeek, GPT Mini, MiMo and GLM. Keep their historical settings
+  // rather than changing models or increasing the shared token/time limits.
+  return modelReasoningOptions(modelId);
 }
 
 function nonnegativeNumber(value: unknown): number | null {
