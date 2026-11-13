@@ -78,6 +78,9 @@ async function noOverflow(page: Page) {
 async function screenshot(page: Page, info: TestInfo, name: string) {
   await noOverflow(page);
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  await page.locator(".watch-cards img, .watch-table-state img").evaluateAll(async (images) => {
+    await Promise.all(images.map(async (node) => { const image = node as HTMLImageElement; image.loading = "eager"; await image.decode(); }));
+  });
   const output = process.env.TRINITY_E2E_SCREENSHOT_DIR;
   const path = output ? join(output, `${name}.png`) : info.outputPath(`${name}.png`);
   await page.screenshot({ path, fullPage: true, animations: "disabled" });
