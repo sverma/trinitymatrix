@@ -20,9 +20,9 @@ const roster: AiPlayerRoster = {
   }))
 };
 
-function mockArena(error?: string) {
+function mockArena(error?: string, selectedRoster: AiPlayerRoster = roster) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input) === "/api/ai/players") return new Response(JSON.stringify(roster), { status: 200 });
+    if (String(input) === "/api/ai/players") return new Response(JSON.stringify(selectedRoster), { status: 200 });
     if (String(input) === "/api/admin/ai/matches" && init?.method === "POST") {
       return new Response(JSON.stringify(error ? { error } : { gameId: "00000000-0000-4000-8000-000000000100" }), { status: error ? 429 : 201 });
     }
@@ -69,6 +69,37 @@ describe("administrator AI-only arena", () => {
     expect(screen.getByRole("button", { name: "Start AI-only ranked match" })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent("6 available AI players; 5 currently available");
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+  });
+
+  it("starts a six-seat AI-only match from an eight-player roster without admitting a paused player", async () => {
+    const user = userEvent.setup();
+    const expanded = Array.from({ length: 8 }, (_, index) => ({
+      ...roster.players[0]!,
+      id: `00000000-0000-4000-8000-00000000000${index + 1}`,
+      displayName: `Agent ${index + 1}`,
+      modelId: `provider/model-${index + 1}-explicitly-versioned-language-model`,
+      modelName: `Model ${index + 1}`,
+      available: index !== 2,
+      ...(index === 2 ? { reason: "Model paused for qualification" } : {})
+    }));
+    const fetchMock = mockArena(undefined, { enabled: true, players: expanded, dailyBudgetUsd: 10 });
+    render(<AdminAiArena />);
+    await screen.findByRole("checkbox", { name: "Select Agent 8" });
+    expect(screen.getAllByRole("checkbox", { name: /^Select Agent/ })).toHaveLength(8);
+    expect(screen.getByText(expanded[7]!.modelId)).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Select Agent 3" })).toBeDisabled();
+    await user.click(screen.getByRole("radio", { name: /6-player AI match/ }));
+    const selected = [0, 1, 4, 5, 6, 7];
+    for (const index of selected.slice(0, 5)) await user.click(screen.getByRole("checkbox", { name: `Select Agent ${index + 1}` }));
+    const start = screen.getByRole("button", { name: "Start AI-only ranked match" });
+    expect(start).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: "Select Agent 8" }));
+    expect(start).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "Select Agent 4" })).toBeDisabled();
+    await user.click(start);
+    expect(await screen.findByText("AI match started; results appear in AI matches rankings.")).toBeInTheDocument();
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(String(post[1]?.body))).toEqual({ agentIds: selected.map((index) => expanded[index]!.id) });
   });
 
   it("surfaces a server budget rejection without reporting that a match started", async () => {

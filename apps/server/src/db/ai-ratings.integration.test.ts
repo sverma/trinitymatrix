@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PostGameChatCipher } from "./chat-crypto";
 import { runMigrations } from "./migrate";
 import { PostgresApplicationRepository } from "./repository";
-import { aiIdentityId, INITIAL_AI_ROSTER, PostgresAiStore } from "../ai-repository";
+import { AI_PROMPT_VERSION, aiIdentityId, INITIAL_AI_ROSTER, PostgresAiStore } from "../ai-repository";
 
 const databaseUrl = process.env.AI_RATINGS_TEST_DATABASE_URL;
 
@@ -136,21 +136,62 @@ describe.skipIf(!databaseUrl)("model-bound identities and composition ratings in
     )).rejects.toThrow();
   });
 
-  it("provisions stable model identities idempotently and retains memory across store instances", async () => {
+  it("expands the roster while retaining existing identities, memory, ratings and operator disable flags", async () => {
     const store = new PostgresAiStore(pool!);
+    const newModelIds = new Set(["openai/gpt-6-luna", "meta-llama/llama-4-maverick", "deepseek/deepseek-v4.1-flash"]);
+    const inheritedRoster = INITIAL_AI_ROSTER.filter(({ modelId }) => !newModelIds.has(modelId));
+    const retiredModelId = "deepseek/deepseek-v4.1-flash-1017";
+    const retiredId = aiIdentityId(retiredModelId);
+    const disabledId = aiIdentityId("deepseek/deepseek-v3.2");
+    for (const configured of [...inheritedRoster, {
+      modelId: retiredModelId, modelName: "Retired DeepSeek Flash", displayName: "Retired Flash AI"
+    }]) {
+      const userId = aiIdentityId(configured.modelId);
+      await pool!.query("INSERT INTO app_users (id, email, actor_kind) VALUES ($1, $2, 'ai')", [userId, `agent-${userId}@ai.trinitymatrix.invalid`]);
+      await pool!.query("INSERT INTO player_profiles (user_id, display_name) VALUES ($1, $2)", [userId, configured.displayName]);
+      await pool!.query(
+        "INSERT INTO ai_agents (user_id, model_id, model_name, prompt_version, memory, enabled) VALUES ($1, $2, $3, $4, $5, $6)",
+        [userId, configured.modelId, configured.modelName, AI_PROMPT_VERSION, `Existing notes for ${configured.modelId}`, userId !== disabledId]
+      );
+      await pool!.query(
+        "INSERT INTO player_rankings_by_composition (user_id, composition, rating, games_played, wins, losses) VALUES ($1, 'mixed', 1234, 4, 3, 1)",
+        [userId]
+      );
+    }
+    const existingIds = [...inheritedRoster.map(({ modelId }) => aiIdentityId(modelId)), retiredId];
+    const existingState = () => pool!.query(
+      `SELECT a.user_id, a.model_id, a.model_name, a.prompt_version, a.memory, a.enabled,
+              p.display_name, r.rating, r.games_played, r.wins, r.losses
+       FROM ai_agents a JOIN player_profiles p ON p.user_id=a.user_id
+       JOIN player_rankings_by_composition r ON r.user_id=a.user_id AND r.composition='mixed'
+       WHERE a.user_id=ANY($1::uuid[]) ORDER BY a.user_id`, [existingIds]
+    );
+    const originalState = (await existingState()).rows;
     await store.provision();
+    expect((await existingState()).rows).toEqual(originalState);
     const id = aiIdentityId(INITIAL_AI_ROSTER[0].modelId);
     await store.saveMemory(id, "Use only observed public moves; remember the last match's strategy.");
+    const updatedState = (await existingState()).rows;
     await store.provision();
+    expect((await existingState()).rows).toEqual(updatedState);
     const restartedStore = new PostgresAiStore(pool!);
     const agents = await restartedStore.listAgents();
+    expect(agents).toHaveLength(INITIAL_AI_ROSTER.length);
+    expect(agents.some(({ id: candidate }) => candidate === retiredId)).toBe(false);
     for (const configured of INITIAL_AI_ROSTER) {
       expect(agents.filter(({ id: candidate }) => candidate === aiIdentityId(configured.modelId))).toHaveLength(1);
       expect(agents.find(({ id: candidate }) => candidate === aiIdentityId(configured.modelId)))
-        .toMatchObject({ modelId: configured.modelId, enabled: true });
+        .toMatchObject({ modelId: configured.modelId, modelName: configured.modelName, enabled: aiIdentityId(configured.modelId) !== disabledId });
+      if (newModelIds.has(configured.modelId)) {
+        expect(agents.find(({ id: candidate }) => candidate === aiIdentityId(configured.modelId)))
+          .toMatchObject({ displayName: configured.displayName, memory: "", rating: 1000, gamesPlayed: 0, wins: 0 });
+      }
     }
     expect(agents.find(({ id: candidate }) => candidate === id)?.memory)
       .toBe("Use only observed public moves; remember the last match's strategy.");
+    expect(agents.find(({ id: candidate }) => candidate === disabledId))
+      .toMatchObject({ enabled: false, rating: 1234, gamesPlayed: 4, wins: 3 });
+    expect(aiIdentityId("deepseek/deepseek-v4.1-flash")).not.toBe(retiredId);
     expect(aiIdentityId(INITIAL_AI_ROSTER[0].modelId)).not.toBe(aiIdentityId(INITIAL_AI_ROSTER[1].modelId));
     await expect(store.saveMemory(id, "x".repeat(4001))).rejects.toThrow("too long");
   });
