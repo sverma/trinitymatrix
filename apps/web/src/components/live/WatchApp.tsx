@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { publicGameNameSchema } from "@trinitymatrix/protocol";
-import { api, type AuthPlayer } from "../../api";
+import { api, HttpApiError, type AuthPlayer } from "../../api";
 import { AuthFlow } from "../AuthFlow";
 import { LiveDirectory } from "./LiveDirectory";
 import { WatchPage } from "./WatchPage";
@@ -17,7 +17,11 @@ export function WatchApp() {
   useEffect(() => {
     let active = true; setLoading(true); setError("");
     api.session().then((response) => { if (active) setPlayer(response.authenticated && response.player ? response.player : null); })
-      .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "Your spectator session could not be checked."); })
+      .catch((cause) => {
+        if (!active) return;
+        if (cause instanceof HttpApiError && cause.status === 401) setPlayer(null);
+        else setError(cause instanceof Error ? cause.message : "Your spectator session could not be checked.");
+      })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [retry]);

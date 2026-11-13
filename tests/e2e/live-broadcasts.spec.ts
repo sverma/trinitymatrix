@@ -114,6 +114,23 @@ async function installCanvasCapture(page: Page) {
   });
 }
 
+test("anonymous spectator entry shows sign-in for the live directory and preserves watch links without a gameplay connection", async ({ browser }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  let gameplaySockets = 0;
+  page.on("websocket", (socket) => { if (new URL(socket.url()).pathname === "/ws") gameplaySockets += 1; });
+  try {
+    for (const path of ["/live", "/watch/amber-forest-12345678"]) {
+      await page.goto(path);
+      await expect(page.getByRole("heading", { name: "Enter the club" })).toBeVisible();
+      await expect(page.getByLabel("Email address")).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Spectator access unavailable" })).toHaveCount(0);
+      expect(new URL(page.url()).pathname).toBe(path);
+    }
+    expect(gameplaySockets).toBe(0);
+  } finally { await context.close(); }
+});
+
 test("live broadcasts enforce a real two-minute release for hands and video, preserve game sessions, and support replay, moderation and withdrawal", async ({ browser, request }, testInfo) => {
   test.setTimeout(300_000);
   const accounts: Player[] = [];
