@@ -3,10 +3,11 @@ import { isDeepStrictEqual } from "node:util";
 import type { Pool } from "pg";
 import { aiProtocolRevisionSchema, aiRequestCompletionSchema, aiRequestContextSchema,
   type AiProtocolRevision, type AiRequestCompletion, type AiRequestContext } from "./ai-protocol-provenance";
-import { AI_GAME_PROTOCOL_DESCRIPTOR, AI_GAME_PROTOCOL_IDENTITY_VERSION, AI_LEGACY_V1_PROTOCOL_DESCRIPTOR } from "./ai-game-protocol";
+import { AI_GAME_PROTOCOL_DESCRIPTOR, AI_GAME_PROTOCOL_IDENTITY_VERSION, AI_LEGACY_V1_PROTOCOL_DESCRIPTOR, AI_LEGACY_V1_PROTOCOL_VERSION } from "./ai-game-protocol";
 export type { AiProtocolRevision, AiRequestCompletion, AiRequestContext } from "./ai-protocol-provenance";
 
-export const AI_PROMPT_VERSION = "trinity-v1";
+export const AI_LEGACY_IDENTITY_VERSION = AI_LEGACY_V1_PROTOCOL_VERSION;
+export const AI_PROMPT_VERSION = AI_GAME_PROTOCOL_IDENTITY_VERSION;
 export const AI_CURRENT_IDENTITY_VERSION = AI_GAME_PROTOCOL_IDENTITY_VERSION;
 export const AI_REQUEST_RESERVATION_USD = 0.05;
 export const INITIAL_AI_ROSTER = [
@@ -76,7 +77,7 @@ export class PostgresAiStore implements AiStore {
         );
         await client.query(
           `INSERT INTO player_profiles (user_id, display_name, badge_id) VALUES ($1, $2, 'strategist') ON CONFLICT (user_id) DO NOTHING`,
-          [id, `${agent.displayName} · v2`]
+          [id, agent.displayName]
         );
         await client.query(
           `INSERT INTO ai_agents (user_id,model_id,model_name,prompt_version,enabled)
@@ -109,7 +110,7 @@ export class PostgresAiStore implements AiStore {
         OR (a.prompt_version=$3 AND EXISTS (SELECT 1 FROM match_participants mp JOIN ranking_matches m ON m.id=mp.match_id
           WHERE mp.user_id=a.user_id AND m.status='active'))
       ORDER BY p.display_name,a.user_id`,
-    [AI_CURRENT_IDENTITY_VERSION, INITIAL_AI_ROSTER.map(({ modelId }) => modelId), AI_PROMPT_VERSION]);
+    [AI_CURRENT_IDENTITY_VERSION, INITIAL_AI_ROSTER.map(({ modelId }) => modelId), AI_LEGACY_IDENTITY_VERSION]);
     return result.rows.map((r) => ({ id: r.user_id, displayName: r.display_name, modelId: r.model_id,
       modelName: r.model_name, memory: r.memory, enabled: r.enabled, rating: r.rating, gamesPlayed: r.games_played, wins: r.wins,
       protocolId: r.identity_version, identityVersion: r.identity_version, selectable: r.selectable }));

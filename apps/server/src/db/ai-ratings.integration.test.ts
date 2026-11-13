@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PostGameChatCipher } from "./chat-crypto";
 import { runMigrations } from "./migrate";
 import { PostgresApplicationRepository } from "./repository";
-import { AI_CURRENT_IDENTITY_VERSION, AI_PROMPT_VERSION, aiIdentityId, INITIAL_AI_ROSTER, PostgresAiStore } from "../ai-repository";
+import { AI_CURRENT_IDENTITY_VERSION, AI_LEGACY_IDENTITY_VERSION, aiIdentityId, INITIAL_AI_ROSTER, PostgresAiStore } from "../ai-repository";
 
 const databaseUrl = process.env.AI_RATINGS_TEST_DATABASE_URL;
 
@@ -141,19 +141,19 @@ describe.skipIf(!databaseUrl)("model-bound identities and composition ratings in
     const newModelIds = new Set(["openai/gpt-6-luna", "meta-llama/llama-4-maverick", "deepseek/deepseek-v4.1-flash"]);
     const inheritedRoster = INITIAL_AI_ROSTER.filter(({ modelId }) => !newModelIds.has(modelId));
     const retiredModelId = "deepseek/deepseek-v4.1-flash-1017";
-    const retiredId = aiIdentityId(retiredModelId);
-    const disabledId = aiIdentityId("deepseek/deepseek-v3.2");
-    const suspendedId = aiIdentityId("qwen/qwen3.8-flash");
+    const retiredId = aiIdentityId(retiredModelId, AI_LEGACY_IDENTITY_VERSION);
+    const disabledId = aiIdentityId("deepseek/deepseek-v3.2", AI_LEGACY_IDENTITY_VERSION);
+    const suspendedId = aiIdentityId("qwen/qwen3.8-flash", AI_LEGACY_IDENTITY_VERSION);
     const latestDisabledModel = "mistralai/mistral-small-2603";
     for (const configured of [...inheritedRoster, {
       modelId: retiredModelId, modelName: "Retired DeepSeek Flash", displayName: "Retired Flash AI"
     }]) {
-      const userId = aiIdentityId(configured.modelId);
+      const userId = aiIdentityId(configured.modelId, AI_LEGACY_IDENTITY_VERSION);
       await pool!.query("INSERT INTO app_users (id, email, actor_kind) VALUES ($1, $2, 'ai')", [userId, `agent-${userId}@ai.trinitymatrix.invalid`]);
       await pool!.query("INSERT INTO player_profiles (user_id, display_name) VALUES ($1, $2)", [userId, configured.displayName]);
       await pool!.query(
         "INSERT INTO ai_agents (user_id, model_id, model_name, prompt_version, memory, enabled) VALUES ($1, $2, $3, $4, $5, $6)",
-        [userId, configured.modelId, configured.modelName, AI_PROMPT_VERSION, `Existing notes for ${configured.modelId}`, userId !== disabledId]
+        [userId, configured.modelId, configured.modelName, AI_LEGACY_IDENTITY_VERSION, `Existing notes for ${configured.modelId}`, userId !== disabledId]
       );
       await pool!.query(
         "INSERT INTO player_rankings_by_composition (user_id, composition, rating, games_played, wins, losses) VALUES ($1, 'mixed', 1234, 4, 3, 1)",
@@ -167,7 +167,7 @@ describe.skipIf(!databaseUrl)("model-bound identities and composition ratings in
     await pool!.query("INSERT INTO app_users(id,email,actor_kind) VALUES($1,$2,'ai')", [predecessorId, `agent-${predecessorId}@ai.trinitymatrix.invalid`]);
     await pool!.query("INSERT INTO player_profiles(user_id,display_name) VALUES($1,'Older model cohort')", [predecessorId]);
     await pool!.query("INSERT INTO ai_agents(user_id,model_id,model_name,prompt_version,enabled) VALUES($1,$2,'Mistral','historical-protocol-cohort',false)", [predecessorId, latestDisabledModel]);
-    const existingIds = [...inheritedRoster.map(({ modelId }) => aiIdentityId(modelId)), retiredId];
+    const existingIds = [...inheritedRoster.map(({ modelId }) => aiIdentityId(modelId, AI_LEGACY_IDENTITY_VERSION)), retiredId];
     const existingState = () => pool!.query(
       `SELECT a.user_id, a.model_id, a.model_name, a.prompt_version, a.memory, a.enabled,
               p.display_name, r.rating, r.games_played, r.wins, r.losses
@@ -191,9 +191,9 @@ describe.skipIf(!databaseUrl)("model-bound identities and composition ratings in
       const currentId = aiIdentityId(configured.modelId, AI_CURRENT_IDENTITY_VERSION);
       expect(agents.filter(({ id: candidate }) => candidate === currentId)).toHaveLength(1);
       expect(agents.find(({ id: candidate }) => candidate === currentId))
-        .toMatchObject({ modelId: configured.modelId, modelName: configured.modelName, enabled: ![disabledId, suspendedId].includes(aiIdentityId(configured.modelId)) && configured.modelId !== latestDisabledModel,
+        .toMatchObject({ modelId: configured.modelId, modelName: configured.modelName, enabled: ![disabledId, suspendedId].includes(aiIdentityId(configured.modelId, AI_LEGACY_IDENTITY_VERSION)) && configured.modelId !== latestDisabledModel,
           protocolId: AI_CURRENT_IDENTITY_VERSION, identityVersion: AI_CURRENT_IDENTITY_VERSION, selectable: true,
-          displayName: `${configured.displayName} · v2`, rating: 1000, gamesPlayed: 0, wins: 0 });
+          displayName: configured.displayName, rating: 1000, gamesPlayed: 0, wins: 0 });
       if (currentId !== id) expect(agents.find(({ id: candidate }) => candidate === currentId)?.memory).toBe("");
     }
     expect(agents.find(({ id: candidate }) => candidate === id)?.memory)
@@ -204,15 +204,15 @@ describe.skipIf(!databaseUrl)("model-bound identities and composition ratings in
     await pool!.query("UPDATE ai_agents SET enabled=false WHERE user_id=$1", [currentDisabledId]);
     await store.provision();
     expect((await store.listAgents()).find(({ id: candidate }) => candidate === currentDisabledId)?.enabled).toBe(false);
-    expect(aiIdentityId("deepseek/deepseek-v4.1-flash")).not.toBe(retiredId);
-    expect(aiIdentityId(INITIAL_AI_ROSTER[0].modelId)).not.toBe(aiIdentityId(INITIAL_AI_ROSTER[1].modelId));
+    expect(aiIdentityId("deepseek/deepseek-v4.1-flash", AI_LEGACY_IDENTITY_VERSION)).not.toBe(retiredId);
+    expect(aiIdentityId(INITIAL_AI_ROSTER[0].modelId, AI_LEGACY_IDENTITY_VERSION)).not.toBe(aiIdentityId(INITIAL_AI_ROSTER[1].modelId, AI_LEGACY_IDENTITY_VERSION));
     await expect(store.saveMemory(id, "x".repeat(4001))).rejects.toThrow("too long");
   });
 
   it("keeps legacy workers only for active matches and never admits them as new opponents", async () => {
     const store = new PostgresAiStore(pool!);
-    const legacyId = aiIdentityId(INITIAL_AI_ROSTER[0].modelId);
-    const legacyDisabledId = aiIdentityId("deepseek/deepseek-v3.2");
+    const legacyId = aiIdentityId(INITIAL_AI_ROSTER[0].modelId, AI_LEGACY_IDENTITY_VERSION);
+    const legacyDisabledId = aiIdentityId("deepseek/deepseek-v3.2", AI_LEGACY_IDENTITY_VERSION);
     const matches: string[] = [];
     for (const oldId of [legacyId, legacyDisabledId]) {
       const matchId = randomUUID(); matches.push(matchId);
@@ -221,8 +221,8 @@ describe.skipIf(!databaseUrl)("model-bound identities and composition ratings in
     }
     const runtime = await store.listAgents();
     expect(runtime.filter(({ selectable }) => selectable)).toHaveLength(INITIAL_AI_ROSTER.length);
-    expect(runtime.find(({ id }) => id === legacyId)).toMatchObject({ protocolId: AI_PROMPT_VERSION, identityVersion: AI_PROMPT_VERSION, selectable: false, enabled: true });
-    expect(runtime.find(({ id }) => id === legacyDisabledId)).toMatchObject({ protocolId: AI_PROMPT_VERSION, selectable: false, enabled: false });
+    expect(runtime.find(({ id }) => id === legacyId)).toMatchObject({ protocolId: AI_LEGACY_IDENTITY_VERSION, identityVersion: AI_LEGACY_IDENTITY_VERSION, selectable: false, enabled: true });
+    expect(runtime.find(({ id }) => id === legacyDisabledId)).toMatchObject({ protocolId: AI_LEGACY_IDENTITY_VERSION, selectable: false, enabled: false });
     expect(runtime.find(({ id }) => id === aiIdentityId(INITIAL_AI_ROSTER[0].modelId, AI_CURRENT_IDENTITY_VERSION)))
       .toMatchObject({ protocolId: AI_CURRENT_IDENTITY_VERSION, selectable: true });
     await pool!.query("UPDATE ranking_matches SET status='abandoned',end_reason='cancelled',ended_at=clock_timestamp() WHERE id=ANY($1::uuid[])", [matches]);
@@ -277,4 +277,29 @@ describe.skipIf(!databaseUrl)("model-bound identities and composition ratings in
     await pool!.query("UPDATE app_users SET suspended_at=NULL, suspension_reason=NULL WHERE id=$1", [id]);
     expect(await store.reserveRequest(id, "provider/different-model", 100)).toBeNull();
   });
+  it("makes v2 the default and labels earlier profiles v0 without changing identities or results", async () => {
+    const currentId = aiIdentityId(INITIAL_AI_ROSTER[0].modelId);
+    await pool!.query("UPDATE player_profiles SET display_name='Haiku AI · v2' WHERE user_id=$1", [currentId]);
+    await pool!.query("UPDATE player_profiles SET display_name='Human · v2' WHERE user_id=$1", [humanIds[0]]);
+    await pool!.query("INSERT INTO player_rankings_by_composition(user_id,composition,rating,games_played,wins,losses) VALUES($1,'mixed',1464,5,3,2) ON CONFLICT(user_id,composition) DO UPDATE SET rating=1464,games_played=5,wins=3,losses=2,drops=0", [currentId]);
+    const identities = (await pool!.query("SELECT * FROM ai_agents ORDER BY user_id")).rows;
+    const ratings = (await pool!.query("SELECT * FROM player_rankings_by_composition ORDER BY user_id,composition")).rows;
+    const participants = (await pool!.query("SELECT * FROM match_participants ORDER BY match_id,user_id")).rows;
+    const requests = (await pool!.query("SELECT * FROM ai_model_requests ORDER BY id")).rows;
+    const migration = { name: "0011_default_ai_v2.sql", sql: readFileSync(new URL("../../migrations/0011_default_ai_v2.sql", import.meta.url), "utf8") };
+    expect((await runMigrations(pool!, [migration])).applied).toEqual([migration.name]);
+    expect((await pool!.query("SELECT * FROM ai_agents ORDER BY user_id")).rows).toEqual(identities);
+    expect((await pool!.query("SELECT * FROM player_rankings_by_composition ORDER BY user_id,composition")).rows).toEqual(ratings);
+    expect((await pool!.query("SELECT * FROM match_participants ORDER BY match_id,user_id")).rows).toEqual(participants);
+    expect((await pool!.query("SELECT * FROM ai_model_requests ORDER BY id")).rows).toEqual(requests);
+    expect((await pool!.query("SELECT display_name FROM player_profiles WHERE user_id=$1", [currentId])).rows).toEqual([{ display_name: "Haiku AI" }]);
+    expect((await pool!.query("SELECT display_name FROM player_profiles WHERE user_id=$1", [aiIdentityId(INITIAL_AI_ROSTER[0].modelId, AI_LEGACY_IDENTITY_VERSION)])).rows).toEqual([{ display_name: "Haiku AI · v0" }]);
+    expect((await pool!.query("SELECT display_name FROM player_profiles WHERE user_id=$1", [humanIds[0]])).rows).toEqual([{ display_name: "Human · v2" }]);
+    expect((await runMigrations(pool!, [migration])).alreadyApplied).toEqual([migration.name]);
+    const newId = randomUUID();
+    await pool!.query("INSERT INTO app_users(id,email,actor_kind) VALUES($1,$2,'ai')", [newId, `${newId}@example.test`]);
+    await pool!.query("INSERT INTO ai_agents(user_id,model_id,model_name) VALUES($1,'fixture/new-model','New model')", [newId]);
+    expect((await pool!.query("SELECT prompt_version FROM ai_agents WHERE user_id=$1", [newId])).rows).toEqual([{ prompt_version: AI_CURRENT_IDENTITY_VERSION }]);
+  });
+
 });

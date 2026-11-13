@@ -7,6 +7,15 @@ import { LiveDirectory } from "./LiveDirectory";
 
 afterEach(() => vi.restoreAllMocks());
 describe("live broadcast directory", () => {
+  it("hides agent version suffixes in archived table titles and rosters", async () => {
+    const players = liveSummary.players.map((player) => player.actorKind === "ai" ? { ...player, displayName: `${player.displayName} · v2` } : player);
+    vi.spyOn(api, "liveDirectory").mockResolvedValue({ broadcasts: [{ ...liveSummary, players, title: players.map(({ displayName }) => displayName).join(" · ") }], nextCursor: null, serverNow: Date.now() });
+    render(<LiveDirectory />);
+    expect(await screen.findByRole("link", { name: "Asha · Model AI" })).toBeInTheDocument();
+    expect(screen.getByText("Model AI")).toBeInTheDocument();
+    expect(screen.queryByText(/Model AI · v2/)).not.toBeInTheDocument();
+  });
+
   it("filters and searches without losing bounded pagination or duplicating tables", async () => {
     const user = userEvent.setup();
     const other = { ...liveSummary, gameName: "royal-falcon-87654321", title: "Another table" };

@@ -14,6 +14,27 @@ beforeEach(() => {
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe("delayed table spectator page", () => {
+  it.each(["v0", "v2"])("hides archived AI %s labels throughout the broadcast without altering human names", async (version) => {
+    const frame = liveFrame();
+    frame.game.players[0]!.displayName = "Asha · v2";
+    const model = frame.game.players[1]!;
+    model.displayName = `Model AI · ${version}`;
+    frame.event = { type: "game.declare", actorPlayerId: model.id, summary: `${model.displayName}: Declared` };
+    frame.winner = { id: model.id, name: model.displayName, reason: "declaration", score: 102 };
+    const detail = liveDetail(frame);
+    detail.broadcast = { ...detail.broadcast, players: detail.broadcast.players.map((player, index) => ({ ...player, displayName: frame.game.players[index]!.displayName })) };
+    detail.broadcast.title = detail.broadcast.players.map(({ displayName }) => displayName).join(" · ");
+    vi.mocked(api.liveBroadcast).mockResolvedValue(detail);
+    vi.mocked(api.broadcastTimeline).mockResolvedValue({ frames: [frame], nextCursor: null });
+    render(<WatchPage gameName={liveName} player={livePlayer} onAuthenticationRequired={vi.fn()} />);
+    expect(await screen.findByRole("heading", { name: "Asha · v2 · Model AI" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Model AI's revealed hand" })).toBeInTheDocument();
+    expect(screen.getByText("Model AI won.")).toBeInTheDocument();
+    expect(screen.getByText("Model AI: Declared")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Asha · v2's revealed hand" })).toBeInTheDocument();
+    expect(screen.queryByText(model.displayName)).not.toBeInTheDocument();
+  });
+
   it("renders every released hand and escapes chat text instead of injecting markup", async () => {
     const malicious = '<img src="unsafe" onerror="alert(1)">';
     vi.mocked(api.liveBroadcast).mockResolvedValue({ ...liveDetail(), comments: [liveComment(malicious)], canModerate: true });

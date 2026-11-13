@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { LiveBroadcastSummary } from "@trinitymatrix/protocol";
 import { api, HttpApiError, type LiveDirectoryFilters } from "../../api";
+import { broadcastPlayerName, broadcastTitle } from "./broadcast-names";
 
 export function watchPath(gameName: string) { return `/watch/${encodeURIComponent(gameName)}`; }
 export async function shareBroadcast(gameName: string) {
@@ -60,8 +61,8 @@ export function LiveDirectory({ onAuthenticationRequired }: { onAuthenticationRe
     {loading ? <p role="status">Finding broadcasts…</p> : broadcasts.length === 0 ? <div className="live-empty"><h2>No broadcasts found</h2><p>Only public tables whose human players agreed to broadcast appear here. Try another filter or check again shortly.</p></div>
       : <div className="live-directory-grid">{broadcasts.map((broadcast) => <article className="live-directory-card" key={broadcast.gameName}>
         <div className="live-card-meta"><span className={`live-status live-${broadcast.status}`}>{broadcast.status === "buffering" ? "Starting delay" : broadcast.status === "live" ? "Delayed live" : "Ended"}</span><span>{broadcast.viewerCount} watching</span></div>
-        <h2><a href={watchPath(broadcast.gameName)}>{broadcast.title}</a></h2><p>{broadcast.playerCount} players · {broadcast.composition === "mixed" ? "Humans and AI" : broadcast.composition === "ai" ? "AI players" : "Human players"}</p>
-        <ul className="live-roster">{broadcast.players.map((player) => <li key={player.id}><span>{player.displayName}</span>{player.actorKind === "ai" && <small>AI</small>}</li>)}</ul>
+        <h2><a href={watchPath(broadcast.gameName)}>{broadcastTitle(broadcast)}</a></h2><p>{broadcast.playerCount} players · {broadcast.composition === "mixed" ? "Humans and AI" : broadcast.composition === "ai" ? "AI players" : "Human players"}</p>
+        <ul className="live-roster">{broadcast.players.map((player) => <li key={player.id}><span>{broadcastPlayerName(player)}</span>{player.actorKind === "ai" && <small>AI</small>}</li>)}</ul>
         <p className="live-delay-label">All hands revealed · 2-minute minimum delay</p>
         <div className="live-card-actions"><a className="primary live-button-link" href={watchPath(broadcast.gameName)}>Watch table</a><button className="secondary" type="button" onClick={() => { void shareBroadcast(broadcast.gameName).then(setShared).catch(() => setShared(new URL(watchPath(broadcast.gameName), window.location.origin).href)); }}>Share</button></div>
       </article>)}</div>}

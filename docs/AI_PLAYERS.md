@@ -15,9 +15,11 @@ objective, tool boundary and request contract.
 
 ## Identities and configured roster
 
-Eight model families are configured for the current v2 cohort. Current display
-names add `· v2` and the pickers show the protocol version. Configuration does
-not imply that a model has passed operator qualification or is available:
+Eight model families are configured for the default v2 cohort. Current players
+use ordinary model names, and the pickers retain protocol metadata. Earlier
+agents are labelled `· v0` outside broadcasts. Broadcast names, generated table
+titles, winners and move feeds omit agent version suffixes, including archived
+broadcasts. Configuration does not imply that a model has passed operator qualification or is available:
 
 | Player family | OpenRouter model ID |
 | --- | --- |
@@ -39,17 +41,21 @@ its history are retained outside the selectable roster.
 
 Model IDs and prompt versions are immutable database fields. V2 stores its
 semantic protocol version and policy hash in the version binding. A policy
-revision creates a separate deterministic identity for each model. V1 profiles,
-memory, ratings and results remain intact; v2 starts with empty memory and fresh
-AI ratings at 1000. Human-only and existing human mixed ratings are preserved.
+revision creates a separate deterministic identity for each model. Earlier profiles,
+memory, ratings and results remain intact under the public v0 label. Their
+original `trinity-v1` prompt binding remains immutable for audit and recovery.
+V2 is the default for identity generation, provisioning and new database rows.
+This presentation change reuses the existing v2 identities and their running
+ratings; it does not create another cohort or reset ratings. Human-only and
+existing human mixed ratings are preserved.
 Provider-side weights behind a model slug can
 still change; this is not a guarantee of reproducible model weights.
 
 Each identity has a stable UUID, profile, bounded persistent memory and match
 history. One identity occupies one active table at a time. Its roster entry says
 when it is busy. There is no automatic background tournament or idle inference.
-Only the current cohort can join new games. An active v1 participant remains
-registered with its original v1 protocol until that game ends, including across
+Only the current cohort can join new games. An active legacy (v0) participant
+remains registered with its original `trinity-v1` protocol until that game ends, including across
 a server restart. It is excluded from new-match selection.
 Humans can select one available AI for a two-player table, or any five available
 AIs for a six-player table. An unlocked administrator can select any two or any
