@@ -1,0 +1,44 @@
+flowchart TB
+  accTitle: TrinityMatrix production architecture
+  accDescr: Browser clients connect through Nginx to a single authoritative Fastify application. Redis, PostgreSQL and the delayed FFmpeg media worker are private services. OpenRouter and Resend are external integrations. Explicit operator jobs handle migrations, qualification and synthetic agent practice.
+  subgraph clients["People and browsers"]
+    web["Players · spectators · admins<br/>React PWA"]
+    operator["Operator"]
+  end
+
+  subgraph host["Current production · Ubuntu VPS · Docker Compose"]
+    edge["Nginx<br/>HTTPS termination + reverse proxy"]
+    app["Fastify application · one process<br/>API + WebSocket + SSE<br/>Game engine · AI players<br/>Broadcast and video gateway"]
+    redis[("Redis 7.4<br/>Sessions · queues · recovery<br/>Rate limits")]
+    postgres[("PostgreSQL 16<br/>Durable records · event archive<br/>AI identities · budget · notes")]
+    media["Private media worker<br/>Node.js + FFmpeg<br/>HLS delay ≥120 seconds"]
+    video[("Private media volume<br/>Bounded video retention")]
+    jobs["One-off operator jobs<br/>Migrations · qualification<br/>Synthetic practice + evaluation"]
+  end
+
+  subgraph external["External services"]
+    models["OpenRouter<br/>Exact selected AI model"]
+    email["Resend<br/>Email OTP delivery"]
+  end
+
+  web <-->|"HTTPS · WSS · SSE · HLS"| edge
+  edge <-->|"Loopback 8180 → app 8080"| app
+  app <--> redis
+  app <--> postgres
+  app <-->|"Private authenticated HTTP"| media
+  media --> video
+  app <-->|"Own hand + public state / model decision"| models
+  app --> email
+  operator -.->|"Explicit bounded invocation"| jobs
+  jobs <--> models
+  jobs <--> postgres
+  jobs -.->|"Promotion busy check"| redis
+
+  classDef client fill:#eff6ff,stroke:#3b82f6,color:#172554
+  classDef service fill:#ecfdf5,stroke:#059669,color:#064e3b
+  classDef data fill:#fff7ed,stroke:#ea580c,color:#7c2d12
+  classDef outside fill:#f5f3ff,stroke:#8b5cf6,color:#4c1d95
+  class web,operator client
+  class edge,app,media,jobs service
+  class redis,postgres,video data
+  class models,email outside

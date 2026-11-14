@@ -117,7 +117,7 @@ tests/integration        Restart and distributed-runtime verification
 tests/load               Controlled multiplayer load harness
 ```
 
-The browser provides immediate feedback, but the server imports the same game-domain validator and remains authoritative for every declaration and outcome. See [the architecture notes](docs/ARCHITECTURE.md).
+The browser provides immediate feedback, but the server imports the same game-domain validator and remains authoritative for every declaration and outcome. See the [architecture diagram, technology stack and walkthrough](docs/ARCHITECTURE.md) for gameplay, AI practice, broadcasts, data boundaries and deployment details.
 
 ## Real email OTP
 
