@@ -11,6 +11,7 @@ import { useGameSocket } from "./game/useGameSocket";
 import { registerPwa } from "./pwa";
 import { unlockTurnSounds } from "./audio/turnSounds";
 import { WatchApp, isWatchLocation } from "./components/LiveBroadcast";
+import { recordActivity, useActivityTracking } from "./activity-tracker";
 
 function PlayerApp() {
   const [player, setPlayer] = useState<AuthPlayer | null>(null);
@@ -26,6 +27,8 @@ function PlayerApp() {
     setPlayer(null);
   }, []);
   const socket = useGameSocket(Boolean(player), handleAuthenticationRequired);
+  useActivityTracking(player?.id ?? null, socket.game ? "table" : socket.privateRoom ? "private"
+    : playerSection === "play" ? "lobby" : playerSection);
 
   useEffect(() => {
     if (player && !socket.game && !socket.queue && socket.completedGameName) setPlayerSection("history");
@@ -91,6 +94,7 @@ function PlayerApp() {
       onCancel={async () => {
         const roomCode = socket.privateRoom!.roomCode;
         await api.cancelPrivateMatch(roomCode);
+        recordActivity("private.cancel", "private");
         socket.removePrivateRoom(roomCode);
       }}
     />;

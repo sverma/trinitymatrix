@@ -12,6 +12,7 @@ import { profileBadges, type Card, type GamePublicState } from "@trinitymatrix/p
 import { cardLabel, validateDeclaration, validateMeld } from "@trinitymatrix/game-domain";
 import type { AiPlayerForfeit } from "../api";
 import { BroadcastControls } from "./LiveBroadcast";
+import { recordActivity } from "../activity-tracker";
 import {
   getTurnSoundsEnabled,
   playTurnEnded,
@@ -401,6 +402,7 @@ export function GameTable({
 
   const createGroup = () => {
     if (selectedIds.length === 0) return;
+    recordActivity("cards.group", "table");
     const selectedSet = new Set(selectedIds);
     const ordered = currentLayout.groups.flat().filter((id) => selectedSet.has(id));
     updateGroups((groups) => [...groups.map((group) => group.filter((id) => !selectedSet.has(id))), ordered], true);
@@ -408,6 +410,7 @@ export function GameTable({
   };
 
   const sortBySuit = () => {
+    recordActivity("cards.sort", "table");
     const cardOrder = currentLayout.groups.flat().map((id) => byId.get(id)).filter((card): card is Card => Boolean(card));
     const groups = suitOrder.map((suit) => cardOrder
       .filter((card) => suit === "joker" ? card.printedJoker : !card.printedJoker && card.suit === suit)
@@ -538,6 +541,7 @@ export function GameTable({
           aria-pressed={turnSoundsEnabled}
           title={turnSoundsEnabled ? "Mute turn sounds" : "Enable turn sounds"}
           onClick={() => {
+            recordActivity("sound.toggle", "table");
             const enabled = !turnSoundsEnabled;
             setTurnSoundsEnabled(enabled);
             setTurnSoundsState(enabled);

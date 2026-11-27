@@ -45,6 +45,10 @@ See [the full rules and explicit assumptions](docs/TRINITY_RULES.md).
 - PWA support, strict security headers, rate limiting, and local container deployment
 - Unit, load, integration, browser, and accessibility tests
 
+Administrators can inspect sign-ins, sessions, estimated active time, match outcomes
+and interaction trends in the passkey-protected **Activity** panel. See
+[Activity metrics and operations](docs/ACTIVITY.md).
+
 Model-backed AI opponents are available as an opt-in server feature. Humans
 choose persistent, labelled AI identities tied to specific OpenRouter models.
 Human-only, AI-only and mixed matches use independent ratings with the existing

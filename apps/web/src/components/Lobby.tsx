@@ -6,6 +6,7 @@ import { ProfileDialog } from "./ProfileDialog";
 import { PolicyFooter } from "./PolicyPages";
 import { AiPlayers } from "./AiPlayers";
 import { BroadcastConsent } from "./BroadcastConsent";
+import { recordActivity } from "../activity-tracker";
 
 type PlayMode = "general" | "private" | "ai";
 
@@ -141,6 +142,7 @@ export function Lobby({
     setPrivateAction("create");
     try {
       const { room } = await api.createPrivateMatch(privatePlayerCount, normalized);
+      recordActivity("private.create", "private");
       setCreatedRooms((current) => mergeByRoomCode(current, [room]));
       setInviteEmails(Array.from({ length: privatePlayerCount - 1 }, () => ""));
       setPrivateNotice("Private table created. Waiting for invited players.");
@@ -158,6 +160,7 @@ export function Lobby({
     setPrivateNotice("");
     try {
       const { room } = accept ? await api.acceptPrivateMatch(roomCode) : await api.privateMatch(roomCode);
+      if (accept) recordActivity("private.accept", "private");
       setInvitations((current) => current.map((invitation) =>
         invitation.roomCode === roomCode ? { ...invitation, status: "accepted" } : invitation
       ));

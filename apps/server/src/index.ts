@@ -71,6 +71,9 @@ import { registerAiPlayerRoutes } from "./ai-routes";
 import { PostgresBroadcastRepository } from "./broadcast-repository";
 import { registerBroadcastRoutes } from "./broadcast-routes";
 import { registerBroadcastMediaRoutes } from "./broadcast-media-routes";
+import { PostgresActivityRepository } from "./activity-repository";
+import { activitySessionHash, registerActivityRoutes } from "./activity-routes";
+import { BestEffortActivityWriter, waitForActivityWork } from "./activity-writer";
 
 const config = loadRuntimeConfig(process.env);
 assertServerAuthConfig(config);
@@ -169,6 +172,27 @@ const repository = postgres && config.chatEncryptionKey
     )
   : null;
 if (postgres && !repository) throw new Error("CHAT_ENCRYPTION_KEY is required whenever DATABASE_URL is configured.");
+const activityRepository = postgres ? new PostgresActivityRepository(postgres) : null;
+const activityWriter = new BestEffortActivityWriter((reason) => app.log.warn({ code: `ACTIVITY_WRITE_${reason.toUpperCase()}` }, "Activity could not be recorded"));
+function recordActivity(write: () => Promise<unknown>): void {
+  if (!activityRepository || shuttingDown) return;
+  activityWriter.submit(write);
+}
+let activityCleanupFlight: Promise<unknown> | null = null;
+const pruneActivity = () => {
+  if (!activityRepository || activityCleanupFlight || shuttingDown) return;
+  activityCleanupFlight = activityRepository.pruneRetention()
+    .catch(() => app.log.warn({ code: "ACTIVITY_RETENTION_UNAVAILABLE" }, "Activity retention cleanup deferred"))
+    .finally(() => { activityCleanupFlight = null; });
+};
+const activityCleanupTimer = activityRepository ? setInterval(pruneActivity, 5 * 60_000) : null;
+activityCleanupTimer?.unref();
+app.addHook("onClose", async () => {
+  if (activityCleanupTimer) clearInterval(activityCleanupTimer);
+  await activityWriter.close();
+  if (activityCleanupFlight) await waitForActivityWork(activityCleanupFlight);
+});
+pruneActivity();
 let emailSender: EmailOtpSender;
 if (config.authProvider === "mock") {
   emailSender = new MockEmailOtpSender();
@@ -344,6 +368,15 @@ async function hasAdminAccess(request: FastifyRequest): Promise<boolean> {
   return adminPasskeys.hasAccess(session.id, session.playerId, request.cookies.rm_admin);
 }
 
+registerActivityRoutes(app, {
+  repository: activityRepository,
+  resolveSession: async (request) => auth.getSession(request.cookies.rm_session),
+  resolveAdminAccess: hasAdminAccess,
+  adminEmails: config.adminEmails,
+  allowedOrigins: config.allowedOrigins,
+  isReady: () => redisReady && stateHydrated && !shuttingDown
+});
+
 // Normal ceilings accommodate a full six-player household/NAT. Only the
 // explicitly enabled, token-protected mock load stack raises them for thousands
 // of isolated loopback identities; Resend ceilings are never relaxed.
@@ -374,6 +407,9 @@ app.post("/api/auth/verify-otp", { config: { rateLimit: { max: authRateLimits.ve
   if (!parsed.success) return reply.code(400).send({ error: "Enter a valid 6-digit OTP." });
   const session = await auth.verifyOtp(parsed.data.challengeId, parsed.data.code, parsed.data.displayName);
   if (!session) return reply.code(401).send({ error: "The OTP is incorrect or expired." });
+  recordActivity(() => activityRepository!.recordLogin({
+    userId: session.playerId, sessionHash: activitySessionHash(session.id), expiresAt: new Date(session.expiresAt)
+  }));
   reply.setCookie("rm_session", session.id, {
     httpOnly: true,
     sameSite: "lax",
@@ -413,10 +449,24 @@ app.patch("/api/profile", { config: { rateLimit: { max: 30, timeWindow: "10 minu
   const profile = await auth.updateProfile(request.cookies.rm_session, parsed.data);
   if (!profile) return reply.code(401).send({ error: "Your session expired. Please sign in again." });
   await matchmaker.updateProfile(profile.id, profile.displayName, profile.badgeId);
+  recordActivity(async () => {
+    const session = await auth.getSession(request.cookies.rm_session);
+    if (session) await activityRepository!.recordServerInteraction({ userId: session.playerId,
+      sessionHash: activitySessionHash(session.id), action: "profile.save", page: "profile" });
+  });
   return reply.send({ player: profile });
 });
 
 app.post("/api/auth/logout", { config: { rateLimit: { max: 30, timeWindow: "10 minutes" } } }, async (request, reply) => {
+  // Begin identity capture before deleting the session; telemetry still never
+  // holds the logout response open, even if its bounded writer drops the task.
+  const activitySession = activityRepository
+    ? auth.getSession(request.cookies.rm_session).catch(() => null)
+    : Promise.resolve(null);
+  recordActivity(async () => {
+    const session = await activitySession;
+    if (session) await activityRepository!.recordLogout({ userId: session.playerId, sessionHash: activitySessionHash(session.id) });
+  });
   await adminPasskeys?.revokeAccess(request.cookies.rm_admin);
   await auth.deleteSession(request.cookies.rm_session);
   reply.clearCookie("rm_session", { path: "/" });

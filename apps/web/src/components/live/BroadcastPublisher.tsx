@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type BroadcastVideoSession } from "../../api";
 import { useBroadcastVideo } from "./LiveVideo";
 import { captureBroadcast, VideoUploadQueue, type CaptureHandle, type CaptureMode } from "./video-capture";
+import { recordActivity } from "../../activity-tracker";
 
 type ActiveCapture = { capture: CaptureHandle; recorder: MediaRecorder; queue: VideoUploadQueue; session: BroadcastVideoSession; deadline: number };
 
@@ -27,6 +28,7 @@ export function BroadcastPublisher({ gameName, onSharingChange }: { gameName: st
     if (alive.current) setStarting(false);
     const value = active.current;
     if (!value) { if (phase.current === "starting") phase.current = "idle"; return; }
+    recordActivity("video.stop");
     phase.current = "stopping";
     active.current = null; value.capture.stop(); window.clearTimeout(value.deadline);
     setSharing(false); onSharingChange?.(false); setStopping(true);
@@ -84,6 +86,7 @@ export function BroadcastPublisher({ gameName, onSharingChange }: { gameName: st
       active.current = { capture, session, queue, recorder, deadline };
       if (preview.current) preview.current.srcObject = capture.stream;
       recorder.start(1_000); phase.current = "sharing"; setSharing(true); onSharingChange?.(true); setNotice("Sharing started. Viewers will receive video after the two-minute delay.");
+      recordActivity("video.start");
     } catch (cause) {
       if (active.current?.capture === capture) { window.clearTimeout(active.current.deadline); active.current.queue.cancel(); active.current = null; }
       capture?.stop(); if (session) await api.stopBroadcastVideo(session.stopUrl).catch(() => undefined);

@@ -16,7 +16,7 @@ export class HttpApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); this.name = "HttpApiError"; }
 }
 
-async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
+export async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!headers.has("Accept")) headers.set("Accept", "application/json");
   const response = await fetch(url, {

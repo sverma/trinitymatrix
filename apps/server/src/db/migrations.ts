@@ -11,6 +11,7 @@ import aiProtocolProvenance from "../../migrations/0010_ai_protocol_provenance.s
 import defaultAiV2 from "../../migrations/0011_default_ai_v2.sql";
 import validationOnlyAi from "../../migrations/0012_validation_only_ai.sql";
 import aiPractice from "../../migrations/0013_ai_practice.sql";
+import userActivity from "../../migrations/0014_user_activity.sql";
 import type { SqlMigration } from "./migrate";
 
 export const sqlMigrations: readonly SqlMigration[] = [
@@ -26,5 +27,6 @@ export const sqlMigrations: readonly SqlMigration[] = [
   { name: "0010_ai_protocol_provenance.sql", sql: aiProtocolProvenance },
   { name: "0011_default_ai_v2.sql", sql: defaultAiV2 },
   { name: "0012_validation_only_ai.sql", sql: validationOnlyAi },
-  { name: "0013_ai_practice.sql", sql: aiPractice }
+  { name: "0013_ai_practice.sql", sql: aiPractice },
+  { name: "0014_user_activity.sql", sql: userActivity }
 ];

@@ -1,4 +1,5 @@
 import { z } from "zod";
+export * from "./activity";
 
 export const playerCountSchema = z.union([z.literal(2), z.literal(6)]);
 export type PlayerCount = z.infer<typeof playerCountSchema>;

@@ -3,6 +3,7 @@ import type { PlayerCount } from "@trinitymatrix/protocol";
 import { api, type AiPlayerRoster } from "../api";
 import { BroadcastConsent } from "./BroadcastConsent";
 import { AiProtocolVersion } from "./AiProtocolVersion";
+import { recordActivity } from "../activity-tracker";
 
 export function AiPlayers({ connected, privateTableOpen }: { connected: boolean; privateTableOpen: boolean }) {
   const [roster, setRoster] = useState<AiPlayerRoster | null>(null);
@@ -101,7 +102,7 @@ export function AiPlayers({ connected, privateTableOpen }: { connected: boolean;
               return <label key={agent.id} className={`ai-player-option ${checked ? "selected" : ""} ${!agent.available ? "unavailable" : ""}`}>
                 <input type={required === 1 ? "radio" : "checkbox"} name="ai-opponent" aria-label={`Select ${agent.displayName}`} checked={checked}
                   disabled={!agent.available || (required > 1 && !checked && selected.length >= required)}
-                  onChange={() => setSelected((current) => required === 1 ? [agent.id] : checked ? current.filter((id) => id !== agent.id) : [...current, agent.id])} />
+                  onChange={() => { recordActivity("ai.select", "lobby"); setSelected((current) => required === 1 ? [agent.id] : checked ? current.filter((id) => id !== agent.id) : [...current, agent.id]); }} />
                 <span className="ai-player-label">AI player</span>
                 <strong>{agent.displayName}</strong>
                 <span>{agent.modelName}</span>

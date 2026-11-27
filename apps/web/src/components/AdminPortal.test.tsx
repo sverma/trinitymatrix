@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AdminPortal, isAdminLocation } from "./AdminPortal";
 
+vi.mock("../activity-tracker", async (importOriginal) => ({ ...await importOriginal<typeof import("../activity-tracker")>(), useActivityTracking: vi.fn() }));
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -39,6 +41,7 @@ describe("admin portal", () => {
     expect(screen.getByRole("button", { name: "Continue with passkey" })).toBeInTheDocument();
     expect(screen.queryByLabelText(/administrator access code/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "AI arena" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "activity" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/ai/players")).toBe(false);
   });
 
@@ -56,6 +59,23 @@ describe("admin portal", () => {
     await user.click(await screen.findByRole("button", { name: "AI arena" }));
     expect(await screen.findByRole("heading", { name: "AI arena" })).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "AI players are unavailable" })).toBeInTheDocument();
+  });
+
+  it("opens Activity only from the unlocked administrator workspace", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/api/session") return new Response(JSON.stringify({ authenticated: true, isAdmin: true, adminUnlocked: true, player: { id: "admin-1", email: "admin@example.com", displayName: "Admin", badgeId: "strategist", phone: null, createdAt: 1, updatedAt: 1 } }), { status: 200 });
+      if (path === "/api/admin/overview") return new Response(JSON.stringify({ totalUsers: 0, totalGames: 0, activeGames: 0, completedGames: 0 }), { status: 200 });
+      if (path === "/api/admin/activity/overview") return new Response(JSON.stringify({ from: "2026-11-20T00:00:00Z", to: "2026-11-27T00:00:00Z", trackingSince: "2026-11-27T00:00:00Z", retentionDays: 90, generatedAt: "2026-11-27T00:00:00Z", summary: { signIns: 0, uniqueUsers: 0, activeUsers: 0, activeSeconds: 0, matches: 0, wins: 0, losses: 0, drops: 0, interactions: 0 }, daily: [], pages: [], actions: [] }), { status: 200 });
+      if (path.startsWith("/api/admin/activity/")) return new Response(JSON.stringify({ items: [], nextCursor: null }), { status: 200 });
+      return new Response(JSON.stringify({ error: "Not found" }), { status: 404 });
+    }));
+    render(<AdminPortal />);
+    await user.click(await screen.findByRole("button", { name: "activity" }));
+    expect(await screen.findByRole("heading", { name: "Activity", level: 1 })).toBeInTheDocument();
+    expect(await screen.findByText("No players match this activity window and filters.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "activity" })).toHaveAttribute("aria-current", "page");
   });
 
   it("shows a one-time bootstrap flow only before the first passkey exists", async () => {
