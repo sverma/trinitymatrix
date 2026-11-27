@@ -9,6 +9,7 @@ import type {
 } from "@trinitymatrix/protocol";
 import { parseServerMessage } from "@trinitymatrix/protocol";
 import type { AiPlayerForfeit, RealtimeChatMessage } from "../api";
+import { recordActivity } from "../activity-tracker";
 
 type ConnectionState = "connecting" | "connected" | "disconnected" | "authentication-required" | "session-replaced";
 const heartbeatIntervalMs = 20_000;
@@ -404,13 +405,13 @@ export function useGameSocket(enabled: boolean, onAuthenticationRequired?: (reas
     desiredQueue.current = selection;
     setQueue({ joined: 0, required: playerCount, ...selection });
     setNotice(`Joining the ${playerCount}-player ${broadcast ? "broadcast" : "ranking"} queue…`);
-    send({ type: "queue.join", ...selection });
+    if (send({ type: "queue.join", ...selection })) recordActivity("queue.join", "lobby");
   };
 
   const leaveQueue = () => {
     queueLeftExplicitly.current = true;
     desiredQueue.current = null;
-    send({ type: "queue.leave" });
+    if (send({ type: "queue.leave" })) recordActivity("queue.leave", "lobby");
     setQueue(null);
     setNotice("You left matchmaking.");
   };

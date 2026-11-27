@@ -11,6 +11,7 @@ import {
 } from "../api";
 import { PostGameChat } from "./PostGameChat";
 import { ReplayViewer } from "./ReplayViewer";
+import { useActivityPage } from "../activity-tracker";
 
 export type PlayerSection = "play" | "rankings" | "history";
 
@@ -117,6 +118,7 @@ function GameArchive({ entry, player, onBack, realtimeMessages, connectionGenera
   realtimeMessages: readonly RealtimeChatMessage[];
   connectionGeneration: number;
 }) {
+  useActivityPage("replay");
   const [replay, setReplay] = useState<GameReplay | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");

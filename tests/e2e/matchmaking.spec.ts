@@ -435,6 +435,36 @@ test("the admin portal requires an allowlisted email and a verified passkey", as
     await expect(page.getByRole("table", { name: "Registered player accounts" })).toBeVisible();
     const accessibility = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
     expect(accessibility.violations).toEqual([]);
+
+    await page.getByRole("button", { name: "activity", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Activity", exact: true })).toBeVisible();
+    await expect(page.getByRole("table", { name: "Player activity in the selected window" })).toBeVisible();
+    const people = page.getByRole("table", { name: "Player activity in the selected window" });
+    const adminRow = people.getByRole("row").filter({ hasText: adminEmail! });
+    await expect(adminRow).toContainText("E2E Admin");
+    await adminRow.getByRole("button", { name: "Inspect activity for E2E Admin" }).click();
+    await expect(page.getByRole("table", { name: "Recorded browser sessions" })).toBeVisible();
+    await page.getByLabel("Event category").selectOption("auth");
+    await expect(page.locator(".activity-event-list")).toContainText("Signed in");
+    await expect(page.locator(".activity-event-list")).toContainText("Server verified");
+    const activityAccessibility = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(activityAccessibility.violations, JSON.stringify(activityAccessibility.violations, null, 2)).toEqual([]);
+    await page.screenshot({ path: test.info().outputPath("activity-desktop.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth),
+      { message: "Activity must contain wide tables inside their own scroll areas" }).toBeLessThanOrEqual(1);
+    await expect(page.getByRole("heading", { name: "Activity", exact: true })).toBeVisible();
+    const mobileActivityAccessibility = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(mobileActivityAccessibility.violations, JSON.stringify(mobileActivityAccessibility.violations, null, 2)).toEqual([]);
+    await page.screenshot({ path: test.info().outputPath("activity-mobile.png"), fullPage: true });
+    const identity = await (await page.request.get("/api/session")).json() as { player: { id: string } };
+    await expect.poll(async () => {
+      const query = new URLSearchParams({ from: new Date(Date.now() - 3_600_000).toISOString(), to: new Date().toISOString(), actorKind: "human", userId: identity.player.id });
+      const response = await page.request.get(`/api/admin/activity/overview?${query}`);
+      expect(response.status()).toBe(200);
+      const result = await response.json() as { summary: { activeSeconds: number } };
+      return result.summary.activeSeconds;
+    }, { timeout: 25_000, message: "A focused authenticated browser should accrue server-bounded activity time" }).toBeGreaterThan(0);
   } finally {
     await context.close();
   }

@@ -11,8 +11,10 @@ import { AuthFlow } from "./AuthFlow";
 import { AdminPasskeyGate } from "./AdminPasskeyGate";
 import { AdminAiArena } from "./AdminAiArena";
 import { AdminLiveReports } from "./LiveBroadcast";
+import { AdminActivity } from "./AdminActivity";
+import { useActivityTracking } from "../activity-tracker";
 
-type AdminSection = "overview" | "users" | "games" | "ai" | "broadcasts";
+type AdminSection = "overview" | "activity" | "users" | "games" | "ai" | "broadcasts";
 type MatchTypeFilter = "all" | "general" | "private";
 type GameStatusFilter = "all" | AdminGame["status"];
 const liveRefreshIntervalMs = 15_000;
@@ -369,19 +371,21 @@ function GamesView() {
   </section>;
 }
 
-function AdminWorkspace({ onLogout }: { onLogout: () => Promise<void> }) {
+function AdminWorkspace({ playerId, onLogout }: { playerId: string; onLogout: () => Promise<void> }) {
   const [section, setSection] = useState<AdminSection>("overview");
+  useActivityTracking(playerId, "admin");
   return <div className="admin-layout">
     <aside className="admin-sidebar">
       <a className="wordmark admin-wordmark" href="/" aria-label="TrinityMatrix admin home"><span>TM</span><span>TrinityMatrix<small>Admin portal</small></span></a>
       <nav aria-label="Admin navigation">
-        {(["overview", "users", "games", "ai", "broadcasts"] as const).map((item) => <button type="button" key={item} className={section === item ? "active" : ""} aria-current={section === item ? "page" : undefined} onClick={() => setSection(item)}>{item === "ai" ? "AI arena" : item}</button>)}
+        {(["overview", "activity", "users", "games", "ai", "broadcasts"] as const).map((item) => <button type="button" key={item} className={section === item ? "active" : ""} aria-current={section === item ? "page" : undefined} onClick={() => setSection(item)}>{item === "ai" ? "AI arena" : item}</button>)}
       </nav>
       <button type="button" className="text-button" onClick={() => void onLogout()}>Sign out</button>
       <p>Audited staging operations</p>
     </aside>
     <main id="main-content" className="admin-content">
       {section === "overview" && <OverviewView />}
+      {section === "activity" && <AdminActivity />}
       {section === "users" && <UsersView />}
       {section === "games" && <GamesView />}
       {section === "ai" && <AdminAiArena />}
@@ -411,5 +415,5 @@ export function AdminPortal() {
   if (!player) return <AuthFlow onAuthenticated={() => { void refreshSession(); }} />;
   if (!isAdmin) return <main id="main-content" className="auth-page"><section className="auth-panel" aria-labelledby="admin-denied-title"><span className="eyebrow">TrinityMatrix administration</span><h1 id="admin-denied-title">Administrator access required</h1><p>This signed-in email is not on the administrator allowlist.</p><button type="button" className="primary" onClick={() => void api.logout().then(() => { setPlayer(null); setIsAdmin(false); })}>Sign in with another email</button></section></main>;
   if (!adminUnlocked) return <AdminPasskeyGate onUnlocked={refreshSession} onLogout={async () => { await api.logout(); setPlayer(null); setIsAdmin(false); setAdminUnlocked(false); }} />;
-  return <AdminWorkspace onLogout={async () => { await api.logout(); setPlayer(null); setIsAdmin(false); }} />;
+  return <AdminWorkspace playerId={player.id} onLogout={async () => { await api.logout(); setPlayer(null); setIsAdmin(false); }} />;
 }

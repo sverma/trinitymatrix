@@ -74,6 +74,7 @@ jobs:
           # Separate invocations avoid competing for the global migration lock.
           npm run test -w @trinitymatrix/server -- src/db/ai-ratings.integration.test.ts
           npm run test -w @trinitymatrix/server -- src/db/ai-protocol.integration.test.ts
+          npm run test -w @trinitymatrix/server -- src/db/activity.integration.test.ts
           npm run test -w @trinitymatrix/server -- src/db/ai-practice.integration.test.ts
           npm run test -w @trinitymatrix/server -- src/ai-practice-promotion.integration.test.ts
           npm run test -w @trinitymatrix/server -- src/broadcast.integration.test.ts

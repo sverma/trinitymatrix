@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, HttpApiError } from "../../api";
 import { liveName, livePlayer } from "./live.test-helpers";
 import { WatchApp, isWatchLocation } from "./WatchApp";
+import { recordActivity, useActivityTracking } from "../../activity-tracker";
+vi.mock("../../activity-tracker", () => ({ useActivityTracking: vi.fn(), recordActivity: vi.fn() }));
 vi.mock("../AuthFlow", () => ({ AuthFlow: ({ onAuthenticated }: { onAuthenticated: (player: typeof livePlayer) => void }) => <button onClick={() => onAuthenticated(livePlayer)}>Complete spectator sign-in</button> }));
 vi.mock("./WatchPage", () => ({ WatchPage: ({ gameName }: { gameName: string }) => <p>Watching {gameName}</p> }));
 vi.mock("./LiveDirectory", () => ({ LiveDirectory: () => <p>Watching directory</p> }));
@@ -17,6 +19,8 @@ describe("spectator deep links", () => {
     await user.click(await screen.findByRole("button", { name: "Complete spectator sign-in" }));
     expect(screen.getByText(`Watching ${liveName}`)).toBeInTheDocument();
     expect(window.location.pathname).toBe(`/watch/${liveName}`);
+    expect(useActivityTracking).toHaveBeenLastCalledWith(livePlayer.id, "watch");
+    expect(recordActivity).toHaveBeenCalledWith("watch.open", "watch");
     expect(gameplay).not.toHaveBeenCalled();
   });
   it.each(["/live", `/watch/${liveName}`])("treats an anonymous401 at %s as sign-in and preserves the destination", async (path) => {

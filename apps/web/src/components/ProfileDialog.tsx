@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { profileBadges, type ProfileBadgeId } from "@trinitymatrix/protocol";
 import type { AuthPlayer, ProfileUpdate } from "../api";
+import { useActivityPage } from "../activity-tracker";
 
 export function ProfileDialog({
   player,
@@ -11,6 +12,7 @@ export function ProfileDialog({
   onClose: () => void;
   onSave: (profile: ProfileUpdate) => Promise<void>;
 }) {
+  useActivityPage("profile");
   const [displayName, setDisplayName] = useState(player.displayName);
   const [badgeId, setBadgeId] = useState<ProfileBadgeId>(player.badgeId);
   const [countryCode, setCountryCode] = useState(player.phone?.countryCode ?? "+91");

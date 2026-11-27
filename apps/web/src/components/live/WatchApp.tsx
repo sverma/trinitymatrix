@@ -4,6 +4,7 @@ import { api, HttpApiError, type AuthPlayer } from "../../api";
 import { AuthFlow } from "../AuthFlow";
 import { LiveDirectory } from "./LiveDirectory";
 import { WatchPage } from "./WatchPage";
+import { recordActivity, useActivityTracking } from "../../activity-tracker";
 
 export function isWatchLocation(location: Pick<Location, "pathname">) { return /^\/(?:live\/?|watch\/[^/]+\/?)$/.test(location.pathname); }
 
@@ -13,6 +14,9 @@ export function WatchApp() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
+  const isTable = /^\/watch\//.test(window.location.pathname);
+  useActivityTracking(player?.id ?? null, isTable ? "watch" : "live");
+  useEffect(() => { if (player && isTable) recordActivity("watch.open", "watch"); }, [player?.id, isTable]);
   const authenticationRequired = useCallback(() => setPlayer(null), []);
   useEffect(() => {
     let active = true; setLoading(true); setError("");

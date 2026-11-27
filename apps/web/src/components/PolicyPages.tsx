@@ -127,6 +127,7 @@ const policyPages: readonly PolicyPageDefinition[] = [
           <li><strong>Account and profile:</strong> email address, display name, profile badge, optional phone number and country/ISD code, account timestamps and status.</li>
           <li><strong>Authentication and security:</strong> one-time-code challenge records, session identifiers, IP address, user agent, request and security logs. We do not store the plain OTP after verification.</li>
           <li><strong>Gameplay:</strong> table name and ID, participants, invitations, cards and server-authoritative moves, timestamps, outcomes, drops, ratings, match history and replay events.</li>
+          <li><strong>Service activity:</strong> successful sign-ins and sign-outs, page categories, selected interaction categories and estimated active time. These first-party records are available to authorized administrators for service operations. Activity tracking does not collect input contents, card details, private URLs or authentication credentials.</li>
           <li><strong>Community:</strong> post-game and broadcast messages, their author and timestamp, reports, moderation decisions, grievances and appeals. Post-game chat content is encrypted at rest; broadcast chat is stored as readable text for signed-in viewers and authorized moderation.</li>
           <li><strong>Optional broadcasts:</strong> delayed hands and public game events, audience presence, and any screen, camera or microphone recording you choose to publish. Broadcasts are available to signed-in spectators until sharing is stopped. Video replay is retained for up to six hours after recording ends, subject to storage limits and earlier withdrawal.</li>
           <li><strong>Technical:</strong> connection status, reconnect events, errors, performance measurements and device/browser information.</li>
@@ -148,6 +149,7 @@ const policyPages: readonly PolicyPageDefinition[] = [
       <section>
         <h2>5. Retention</h2>
         <p>We keep data only for a documented purpose and retention period. Authentication challenges are short-lived. Account, gameplay, replay, ranking, safety, chat and audit records may be retained after a match or account closure where needed for integrity, disputes, security or law. We delete or irreversibly anonymize data when the purpose and applicable retention obligation end.</p>
+        <p>Detailed service-activity records and active-time estimates use a 90-day retention window with periodic cleanup. Match outcomes remain part of the separate gameplay history. Closing a browser without signing out may leave a session record until it expires; active-time figures are estimates rather than exact attendance records.</p>
         {!policyMetadata.publicationApproved && <p><strong>Launch blocker:</strong> legal, security and product owners must approve the production retention schedule, including exact periods for each category, backup expiry and legal holds.</p>}
       </section>
       <section>
